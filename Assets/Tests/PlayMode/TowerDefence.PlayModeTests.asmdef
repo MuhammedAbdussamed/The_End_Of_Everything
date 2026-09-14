@@ -1,0 +1,10 @@
+{
+    "name": "TowerDefence.PlayModeTests",
+    "references": [
+        "TowerDefence.Runtime"
+    ],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "autoReferenced": false
+}

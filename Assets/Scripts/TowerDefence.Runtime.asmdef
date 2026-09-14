@@ -1,0 +1,6 @@
+{
+    "name": "TowerDefence.Runtime",
+    "references": [
+        "Unity.AI.Navigation"
+    ]
+}
