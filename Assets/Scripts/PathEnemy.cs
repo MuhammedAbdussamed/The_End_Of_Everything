@@ -3,39 +3,36 @@ using UnityEngine;
 using UnityEngine.AI;
 
 [RequireComponent(typeof(NavMeshAgent))]
+[RequireComponent(typeof(Enemy))]
 public class PathEnemy : MonoBehaviour
 {
-    [SerializeField] private Transform destination;
     [SerializeField] private NavMeshSurface pathSurface;
     [SerializeField] private Transform waypointRoot;
     [SerializeField, Min(0.05f)] private float waypointReachDistance = 0.4f;
     [SerializeField, Min(0.05f)] private float navMeshSampleDistance = 0.75f;
-    [SerializeField, Min(0.1f)] private float destinationReachDistance = 1f;
 
     private NavMeshAgent agent;
     private PathWaypoint[] waypoints;
     private NavMeshPath candidatePath;
     private NavMeshQueryFilter queryFilter;
     private bool hasMovementTarget;
-    private bool headingToDestination;
 
     public int WaypointCount => waypoints?.Length ?? 0;
     public int CurrentWaypointIndex { get; private set; }
     public Vector3 CurrentTarget { get; private set; }
     public bool HasReachedDestination { get; private set; }
-    public float DestinationReachDistance => destinationReachDistance;
+    public float WaypointReachDistance => waypointReachDistance;
 
     /// <summary>Ortak NavMesh'i hazırlar ve sıralı patika noktalarını takip etmeye başlar.</summary>
     private void Start()
     {
         agent = GetComponent<NavMeshAgent>();
         pathSurface ??= FindFirstObjectByType<NavMeshSurface>();
-        destination ??= GameObject.Find("Path End")?.transform;
         waypointRoot ??= GameObject.Find("Path Waypoints")?.transform;
 
-        if (pathSurface == null || destination == null || waypointRoot == null)
+        if (pathSurface == null || waypointRoot == null)
         {
-            Debug.LogError("PathEnemy requires a NavMeshSurface, Path Waypoints and a Path End.", this);
+            Debug.LogError("PathEnemy requires a NavMeshSurface and Path Waypoints.", this);
             return;
         }
 
@@ -56,8 +53,8 @@ public class PathEnemy : MonoBehaviour
             areaMask = agent.areaMask
         };
         candidatePath = new NavMeshPath();
-        // Give crossing agents different right-of-way priorities to avoid symmetric stand-offs.
-        agent.avoidancePriority = Random.Range(30, 70);
+        // Enemy hitboxes and agents may overlap; the NavMesh still confines them to the path.
+        agent.obstacleAvoidanceType = ObstacleAvoidanceType.NoObstacleAvoidance;
 
         if (!agent.isOnNavMesh && NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 3f, queryFilter))
         {
@@ -79,12 +76,11 @@ public class PathEnemy : MonoBehaviour
         if (agent == null || !agent.isActiveAndEnabled || !agent.isOnNavMesh
             || !hasMovementTarget || agent.pathPending) return;
 
-        float reachDistance = headingToDestination
-            ? Mathf.Max(destinationReachDistance, agent.stoppingDistance + 0.05f)
-            : Mathf.Max(waypointReachDistance, agent.stoppingDistance);
+        float reachDistance = Mathf.Max(waypointReachDistance, agent.stoppingDistance);
         if (float.IsInfinity(agent.remainingDistance) || agent.remainingDistance > reachDistance) return;
 
-        if (headingToDestination)
+        CurrentWaypointIndex++;
+        if (CurrentWaypointIndex >= WaypointCount)
         {
             HasReachedDestination = true;
             hasMovementTarget = false;
@@ -96,20 +92,12 @@ public class PathEnemy : MonoBehaviour
             return;
         }
 
-        CurrentWaypointIndex++;
         MoveToNextWaypoint();
     }
 
     private void MoveToNextWaypoint()
     {
-        headingToDestination = CurrentWaypointIndex >= WaypointCount;
-        agent.autoBraking = headingToDestination;
-
-        if (headingToDestination)
-        {
-            if (!TrySetTarget(destination.position, null)) StopAtInvalidWaypoint();
-            return;
-        }
+        agent.autoBraking = CurrentWaypointIndex == WaypointCount - 1;
 
         PathWaypoint waypoint = waypoints[CurrentWaypointIndex];
         if (waypoint != null)

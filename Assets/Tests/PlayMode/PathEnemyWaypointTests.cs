@@ -18,7 +18,6 @@ public class PathEnemyWaypointTests
     private PathEnemy enemy;
     private NavMeshAgent agent;
     private PathWaypoint[] waypoints;
-    private Transform destination;
     private float previousTimeScale;
     private SimulationMode previousSimulationMode;
     private Random.State previousRandomState;
@@ -41,6 +40,7 @@ public class PathEnemyWaypointTests
         yield return SceneManager.LoadSceneAsync(ScenePath, LoadSceneMode.Single);
 #endif
         testScene = SceneManager.GetActiveScene();
+        EnemyTestScene.UseOneIndependentEnemy();
         foreach (Camera camera in Object.FindObjectsByType<Camera>(FindObjectsSortMode.None))
             camera.enabled = false;
         foreach (TowerBase tower in Object.FindObjectsByType<TowerBase>(FindObjectsSortMode.None))
@@ -56,8 +56,6 @@ public class PathEnemyWaypointTests
         GameObject waypointRoot = GameObject.Find("Path Waypoints");
         Assert.That(waypointRoot, Is.Not.Null, "The route must be editable through scene waypoint objects.");
         waypoints = waypointRoot.GetComponentsInChildren<PathWaypoint>();
-        destination = GameObject.Find("Path End")?.transform;
-        Assert.That(destination, Is.Not.Null);
         Assert.That(agent.isOnNavMesh, Is.True);
         Assert.That(enemy.CurrentWaypointIndex, Is.Zero, "The enemy must begin with the first waypoint.");
     }
@@ -82,11 +80,11 @@ public class PathEnemyWaypointTests
     }
 
     [Test]
-    public void SceneContainsTenOrderedEmptyWaypointsConnectedToPathEnd()
+    public void SceneContainsOrderedEmptyWaypointsOnThePath()
     {
-        Assert.That(waypoints.Length, Is.EqualTo(10));
-        Assert.That(enemy.WaypointCount, Is.EqualTo(10));
-        Assert.That(waypoints[0].transform.parent.childCount, Is.EqualTo(10));
+        Assert.That(waypoints.Length, Is.GreaterThan(1));
+        Assert.That(enemy.WaypointCount, Is.EqualTo(waypoints.Length));
+        Assert.That(waypoints[0].transform.parent.childCount, Is.EqualTo(waypoints.Length));
 
         Vector3 previous = ProjectToPath(agent.transform.position);
         foreach (PathWaypoint waypoint in waypoints)
@@ -100,7 +98,6 @@ public class PathEnemyWaypointTests
             AssertConnected(previous, point, waypoint.name);
             previous = point;
         }
-        AssertConnected(previous, ProjectToPath(destination.position), "Path End");
     }
 
     [UnityTest]
@@ -127,7 +124,7 @@ public class PathEnemyWaypointTests
         foreach (PathEnemy candidate in enemies)
         {
             Assert.That(GetSurface(candidate), Is.SameAs(surface));
-            Assert.That(candidate.WaypointCount, Is.EqualTo(10));
+            Assert.That(candidate.WaypointCount, Is.EqualTo(waypoints.Length));
             Assert.That(candidate.CurrentWaypointIndex, Is.Zero);
             Assert.That(candidate.GetComponent<NavMeshAgent>().isOnNavMesh, Is.True);
             Assert.That(FlatDistance(candidate.CurrentTarget, waypoints[0].transform.position),
@@ -162,9 +159,11 @@ public class PathEnemyWaypointTests
     }
 
     [UnityTest]
-    public IEnumerator EnemyTraversesEveryWaypointInOrderAndStopsAtPathEnd()
+    public IEnumerator EnemyTraversesEveryWaypointInOrderAndDisappearsAtTheLastWaypoint()
     {
-        Assert.That(agent.speed, Is.EqualTo(3.5f).Within(0.001f), "Routing must preserve the enemy's speed.");
+        Assert.That(agent.speed, Is.EqualTo(5f).Within(0.001f), "Use the speed configured on the NavMeshAgent.");
+        // Completion must depend on the last waypoint, even without a separate endpoint object.
+        Object.Destroy(GameObject.Find("Path End"));
         var visitedIndices = new List<int> { enemy.CurrentWaypointIndex };
         int previousIndex = enemy.CurrentWaypointIndex;
         Vector3 previousTarget = enemy.CurrentTarget;
@@ -197,19 +196,22 @@ public class PathEnemyWaypointTests
                     "The sampled target must remain fixed until the waypoint is reached.");
             }
             if (currentIndex < enemy.WaypointCount)
-                Assert.That(agent.autoBraking, Is.False);
+                Assert.That(agent.autoBraking, Is.EqualTo(currentIndex == enemy.WaypointCount - 1));
         }
 
         Assert.That(enemy.HasReachedDestination, Is.True, "Enemy failed to finish the route within 40 real seconds.");
         Assert.That(enemy.gameObject.activeSelf, Is.False, "Finished enemies must clear the route.");
-        Assert.That(visitedIndices, Is.EqualTo(Enumerable.Range(0, 10).ToArray()));
-        Assert.That(agent.autoBraking, Is.True, "Only the final endpoint should brake the agent.");
-        Assert.That(FlatDistance(enemy.transform.position, destination.position),
-            Is.LessThanOrEqualTo(enemy.DestinationReachDistance + 0.1f));
+        Assert.That(visitedIndices, Is.EqualTo(Enumerable.Range(0, waypoints.Length).ToArray()));
+        Assert.That(agent.autoBraking, Is.True, "Only the final waypoint should brake the agent.");
+        Assert.That(enemy.CurrentWaypointIndex, Is.EqualTo(waypoints.Length));
+        Assert.That(FlatDistance(enemy.CurrentTarget, waypoints.Last().transform.position),
+            Is.LessThanOrEqualTo(waypoints.Last().Radius + 0.05f));
+        Assert.That(FlatDistance(enemy.transform.position, enemy.CurrentTarget),
+            Is.LessThanOrEqualTo(enemy.WaypointReachDistance + 0.1f));
         Vector3 stoppedPosition = enemy.transform.position;
         yield return new WaitForSeconds(0.5f);
         Assert.That(FlatDistance(stoppedPosition, enemy.transform.position), Is.LessThan(0.1f),
-            "The enemy must remain stopped once it reaches Path End.");
+            "The enemy must remain inactive at the final waypoint.");
     }
 
     private Vector3 ProjectToPath(Vector3 point)

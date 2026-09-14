@@ -40,12 +40,16 @@ public class TowerCombatTests
         yield return SceneManager.LoadSceneAsync(ScenePath, LoadSceneMode.Single);
 #endif
         testScene = SceneManager.GetActiveScene();
+        EnemyTestScene.UseOneIndependentEnemy();
         foreach (Camera camera in Object.FindObjectsByType<Camera>(FindObjectsSortMode.None))
             camera.enabled = false;
         // Let PathEnemy.Start build its real NavMesh before taking control of movement.
         yield return null;
         enemy = Object.FindFirstObjectByType<PathEnemy>();
         Assert.That(enemy, Is.Not.Null, "SampleScene must contain the enemy cube.");
+        Assert.That(Object.FindObjectsByType<PathEnemy>(FindObjectsSortMode.None).Length, Is.EqualTo(1),
+            "The current scene must contain only the one remaining enemy.");
+        Assert.That(enemy.GetComponent<Enemy>(), Is.Not.Null);
         // Keep focused combat cases isolated; the crowd test exercises the full formation.
         foreach (PathEnemy other in Object.FindObjectsByType<PathEnemy>(FindObjectsSortMode.None))
             if (other != enemy) other.gameObject.SetActive(false);
@@ -55,7 +59,7 @@ public class TowerCombatTests
         Assert.That(enemyBody.isKinematic, Is.True, "The moving enemy needs its trigger Rigidbody.");
         Assert.That(enemy.isActiveAndEnabled, Is.True);
         towers = Object.FindObjectsByType<TowerBase>(FindObjectsSortMode.None);
-        Assert.That(towers.Length, Is.EqualTo(2));
+        Assert.That(towers.Length, Is.EqualTo(3));
         MoveEnemy(OutsideAllRanges);
         SimulateStep();
         yield return null;
@@ -82,12 +86,13 @@ public class TowerCombatTests
     }
 
     [Test]
-    public void SceneTowersHaveIndependentPoolsAndCorrectWorldRange()
+    public void SceneTowersHaveIndependentPoolsAndPreserveConfiguredColliderRadius()
     {
         var pools = new HashSet<Transform>();
         foreach (TowerBase tower in towers)
         {
             Assert.That(tower.Data, Is.Not.Null, tower.name);
+            Assert.That(tower.TowerRange, Is.EqualTo(tower is ArcherTower ? 3.5f : tower is MageTower ? 3f : 3.25f).Within(0.001f));
             Transform pool = GetPool(tower);
             Assert.That(pool, Is.Not.Null, tower.name + " needs its own projectile pool.");
             Assert.That(pools.Add(pool), Is.True, tower.name + " must not share another tower's pool.");
@@ -95,11 +100,9 @@ public class TowerCombatTests
             Assert.That(GetProjectiles(tower).All(projectile => !projectile.gameObject.activeSelf), Is.True);
 
             SphereCollider rangeCollider = tower.GetComponent<SphereCollider>();
-            Vector3 scale = tower.transform.lossyScale;
-            float largestScale = Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
             Assert.That(rangeCollider.isTrigger, Is.True, tower.name);
-            Assert.That(rangeCollider.radius * largestScale,
-                Is.EqualTo(tower.TowerRange).Within(0.001f), tower.name + " world trigger radius");
+            Assert.That(rangeCollider.radius,
+                Is.EqualTo(tower.TowerRange).Within(0.001f), tower.name + " Inspector Radius must not be divided by scale.");
         }
     }
 
@@ -131,6 +134,192 @@ public class TowerCombatTests
     }
 
     [UnityTest]
+    public IEnumerator MortarRisesAboveTheTowerThenFallsAndDamagesItsTarget()
+    {
+        BomberTower bomber = towers.OfType<BomberTower>().Single();
+        yield return IsolateTower(bomber);
+        MoveEnemy(bomber.transform.position + Vector3.right * (WorldRadius(bomber) * 0.75f));
+        SimulateStep();
+        yield return WaitForLaunch(bomber);
+        TowerProjectile projectile = GetActiveProjectile(bomber);
+        Rigidbody body = projectile.GetComponent<Rigidbody>();
+        Assert.That(projectile.IsMortar, Is.True);
+        Assert.That(body.useGravity, Is.True);
+        Assert.That(body.linearVelocity.y, Is.GreaterThan(0f));
+        float startHeight = body.position.y;
+        float highest = startHeight;
+        bool fell = false;
+        for (int step = 0; step < 150 && projectile.gameObject.activeSelf; step++)
+        {
+            SimulateStep();
+            if (!projectile.gameObject.activeSelf) break;
+            highest = Mathf.Max(highest, body.position.y);
+            fell |= body.linearVelocity.y < 0f;
+        }
+        Assert.That(highest, Is.GreaterThan(startHeight + 3f), "Mortar must visibly arc over the path.");
+        Assert.That(fell, Is.True);
+        Assert.That(projectile.gameObject.activeSelf, Is.False);
+        Assert.That(enemy.GetComponent<Enemy>().CurrentHealth, Is.EqualTo(80f));
+        Assert.That(projectile.IsMortar, Is.False);
+        Assert.That(body.useGravity, Is.False, "Pool return must clear the ballistic state.");
+    }
+
+    [Test]
+    public void BomberDataHasIntermediateRangeHigherDamageAndSlowerFireRate()
+    {
+        BomberTower bomber = towers.OfType<BomberTower>().Single();
+        Assert.That(bomber.Data, Is.InstanceOf<BomberTowerData>());
+        Assert.That(bomber.BlastRadius, Is.EqualTo(3f));
+        Assert.That(bomber.DamageType, Is.EqualTo(TowerData.TowerDamageType.Physical));
+        Assert.That(GetProjectiles(bomber).Length, Is.EqualTo(8));
+        Assert.That(1f / bomber.TowerAttackSpeed, Is.EqualTo(1.5f).Within(0.0001f));
+        foreach (TowerBase other in towers.Where(t => t != bomber))
+        {
+            Assert.That(bomber.TowerDamage, Is.GreaterThan(other.TowerDamage));
+            Assert.That(bomber.TowerAttackSpeed, Is.LessThan(other.TowerAttackSpeed));
+        }
+        Assert.That(bomber.TowerRange, Is.GreaterThan(towers.OfType<MageTower>().Single().TowerRange));
+        Assert.That(bomber.TowerRange, Is.LessThan(towers.OfType<ArcherTower>().Single().TowerRange));
+    }
+
+    [UnityTest]
+    public IEnumerator BombExplosionHitsDenseGroupOncePerEnemyAndExcludesOutsideWaitingAndOtherLayers()
+    {
+        BomberTower bomber = towers.OfType<BomberTower>().Single();
+        yield return IsolateTower(bomber);
+        Vector3 targetPosition = bomber.transform.position + Vector3.right * (WorldRadius(bomber) * 0.75f);
+        MoveEnemy(targetPosition);
+        var nearby = new List<Enemy>();
+        // More than 16 colliders exercises a saturated query buffer, including compound colliders.
+        for (int i = 0; i < 32; i++)
+        {
+            Enemy splashTarget = CreateSplashEnemy(targetPosition + Vector3.forward * (0.8f + i * 0.04f));
+            var extraCollider = new GameObject("Extra enemy collider");
+            extraCollider.layer = splashTarget.gameObject.layer;
+            extraCollider.transform.SetParent(splashTarget.transform, false);
+            extraCollider.AddComponent<BoxCollider>();
+            nearby.Add(splashTarget);
+        }
+        Enemy outside = CreateSplashEnemy(targetPosition + Vector3.forward * (bomber.BlastRadius + 1.25f));
+        Enemy waiting = CreateSplashEnemy(targetPosition + Vector3.back);
+        waiting.SetWaiting(true);
+        Enemy otherLayer = CreateSplashEnemy(targetPosition + Vector3.forward);
+        otherLayer.gameObject.layer = LayerMask.NameToLayer("Default");
+        Enemy lethal = CreateSplashEnemy(targetPosition + Vector3.back * 1.5f);
+        lethal.TakeDamage(lethal.MaxHealth - bomber.TowerDamage, TowerData.TowerDamageType.Magic);
+        SimulateStep();
+        yield return WaitForLaunch(bomber);
+        TowerProjectile projectile = GetActiveProjectile(bomber);
+        for (int step = 0; step < 150 && projectile.gameObject.activeSelf; step++) SimulateStep();
+
+        Assert.That(projectile.gameObject.activeSelf, Is.False);
+        Assert.That(enemy.GetComponent<Enemy>().CurrentHealth, Is.EqualTo(80f));
+        foreach (Enemy splashTarget in nearby)
+        {
+            Assert.That(splashTarget.CurrentHealth, Is.EqualTo(80f), "Every enemy must receive exactly one splash hit.");
+            Assert.That(splashTarget.LastDamageType, Is.EqualTo(TowerData.TowerDamageType.Physical));
+        }
+        Assert.That(outside.CurrentHealth, Is.EqualTo(100f));
+        Assert.That(waiting.CurrentHealth, Is.EqualTo(100f));
+        Assert.That(otherLayer.CurrentHealth, Is.EqualTo(100f));
+        Assert.That(lethal.IsDead, Is.True);
+        Assert.That(lethal.gameObject.activeSelf, Is.False);
+        bomber.ProjectileHit(projectile, enemy);
+        Assert.That(nearby.All(e => e.CurrentHealth == 80f), Is.True, "Duplicate callbacks must not explode twice.");
+        BombExplosionVisual visual = Object.FindFirstObjectByType<BombExplosionVisual>();
+        Assert.That(visual, Is.Not.Null);
+        Assert.That(Vector3.Distance(visual.transform.position, targetPosition), Is.LessThan(1f), "Explosion must use the impact position before the bomb returns to the pool.");
+        LineRenderer ring = visual.GetComponent<LineRenderer>();
+        Assert.That(ring.GetPosition(0).magnitude, Is.EqualTo(bomber.BlastRadius).Within(0.001f));
+        yield return new WaitForSeconds(0.4f);
+        Assert.That(visual.gameObject.activeSelf, Is.False, "The explosion visual must return to its inactive state.");
+    }
+
+    [UnityTest]
+    public IEnumerator MortarFliesOverAnEnemyStandingBetweenTowerAndLandingPoint()
+    {
+        BomberTower bomber = towers.OfType<BomberTower>().Single();
+        yield return IsolateTower(bomber);
+        MoveEnemy(bomber.transform.position + Vector3.right * (WorldRadius(bomber) * 0.9f));
+        Enemy blocker = CreateSplashEnemy(bomber.transform.position + Vector3.right * 4f);
+        PathEnemy blockerPath = blocker.gameObject.AddComponent<PathEnemy>();
+        Enemy adjacent = CreateSplashEnemy(blocker.transform.position + Vector3.forward * 1.5f);
+        // Run launch and physical collision in the same frame, before the stationary blocker starts navigation.
+        bool launched = (bool)typeof(TowerBase).GetMethod("LaunchProjectile", BindingFlags.Instance | BindingFlags.NonPublic)
+            .Invoke(bomber, new object[] { enemy });
+        Assert.That(launched, Is.True);
+        TowerProjectile projectile = GetActiveProjectile(bomber);
+        for (int step = 0; step < 150 && projectile.gameObject.activeSelf; step++) SimulateStep();
+        blockerPath.enabled = false;
+        Assert.That(projectile.gameObject.activeSelf, Is.False);
+        Assert.That(blocker.CurrentHealth, Is.EqualTo(100f));
+        Assert.That(adjacent.CurrentHealth, Is.EqualTo(100f));
+        Assert.That(enemy.GetComponent<Enemy>().CurrentHealth, Is.EqualTo(80f), "The shell must land at the distant target after passing above the blocker.");
+    }
+
+    [UnityTest]
+    public IEnumerator MortarStillExplodesOnThePathAfterItsOriginalTargetDies()
+    {
+        BomberTower bomber = towers.OfType<BomberTower>().Single();
+        yield return IsolateTower(bomber);
+        Vector3 landing = new Vector3(bomber.transform.position.x, 0.68f, 4.5f);
+        MoveEnemy(landing);
+        Enemy nearby = CreateSplashEnemy(landing + Vector3.right * 1.5f);
+        SimulateStep();
+        yield return WaitForLaunch(bomber);
+        TowerProjectile projectile = GetActiveProjectile(bomber);
+        enemy.GetComponent<Enemy>().TakeDamage(999f, TowerData.TowerDamageType.Physical);
+        yield return null;
+        Assert.That(projectile.gameObject.activeSelf, Is.True, "A launched shell must not vanish when another tower kills its target.");
+        for (int step = 0; step < 200 && projectile.gameObject.activeSelf; step++)
+        {
+            SimulateStep();
+            yield return null;
+        }
+        Assert.That(projectile.gameObject.activeSelf, Is.False, "The landing point must detonate a shell even on a path made of render-only geometry.");
+        Assert.That(nearby.CurrentHealth, Is.EqualTo(80f));
+        bomber.ProjectileGroundImpact(projectile);
+        Assert.That(nearby.CurrentHealth, Is.EqualTo(80f), "Ground callbacks must not detonate the same shell twice.");
+    }
+
+    [UnityTest]
+    public IEnumerator BomberWaitsOneAndAHalfSecondsBetweenShots()
+    {
+        BomberTower bomber = towers.OfType<BomberTower>().Single();
+        yield return IsolateTower(bomber);
+        MoveEnemy(bomber.transform.position + Vector3.right * (WorldRadius(bomber) * 0.75f));
+        SimulateStep();
+        yield return WaitForLaunch(bomber);
+        // Physics is paused, so both shots stay in flight and the pool reveals the actual firing interval.
+        float launchedAt = Time.time;
+        while (Time.time - launchedAt < 1.35f)
+        {
+            Assert.That(GetProjectiles(bomber).Count(p => p.gameObject.activeSelf), Is.EqualTo(1));
+            yield return null;
+        }
+        float deadline = Time.realtimeSinceStartup + 1f;
+        while (GetProjectiles(bomber).Count(p => p.gameObject.activeSelf) < 2 && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.That(GetProjectiles(bomber).Count(p => p.gameObject.activeSelf), Is.EqualTo(2));
+        Assert.That(Time.time - launchedAt, Is.InRange(1.45f, 1.7f));
+    }
+
+    private static Enemy CreateSplashEnemy(Vector3 position)
+    {
+        var gameObject = new GameObject("Splash Test Enemy");
+        gameObject.SetActive(false);
+        gameObject.layer = LayerMask.NameToLayer("Enemy");
+        gameObject.transform.position = position;
+        gameObject.AddComponent<NavMeshAgent>().enabled = false;
+        gameObject.AddComponent<BoxCollider>();
+        Rigidbody body = gameObject.AddComponent<Rigidbody>();
+        body.isKinematic = true;
+        body.useGravity = false;
+        Enemy stats = gameObject.AddComponent<Enemy>();
+        gameObject.SetActive(true);
+        return stats;
+    }
+
+    [UnityTest]
     public IEnumerator OverlappingEnemyIsAcquiredWhenItsCenterEntersRangeWithoutReentry()
     {
         TowerRangeContactProbe probe = enemy.gameObject.AddComponent<TowerRangeContactProbe>();
@@ -142,7 +331,7 @@ public class TowerCombatTests
             probe.ExitCount = 0;
 
             // The cube is one unit wide: its near face overlaps while its center is out of range.
-            MoveEnemy(tower.transform.position + Vector3.right * (tower.TowerRange + 0.25f));
+            MoveEnemy(tower.transform.position + Vector3.right * (WorldRadius(tower) + 0.25f));
             SimulateStep();
             yield return null;
             SimulateStep();
@@ -151,7 +340,7 @@ public class TowerCombatTests
             Assert.That(tower.EnemiesInRange, Is.Empty, tower.name);
             Assert.That(GetActiveProjectile(tower), Is.Null, tower.name + " fired outside its data range.");
 
-            MoveEnemy(tower.transform.position + Vector3.right * (tower.TowerRange - 0.25f));
+            MoveEnemy(tower.transform.position + Vector3.right * (WorldRadius(tower) - 0.25f));
             SimulateStep();
             yield return WaitForLaunch(tower);
             Assert.That(tower.EnemiesInRange, Does.Contain(enemy), tower.name);
@@ -166,18 +355,25 @@ public class TowerCombatTests
         foreach (TowerBase tower in towers)
         {
             yield return IsolateTower(tower);
-            MoveEnemy(tower.transform.position + Vector3.right * (tower.TowerRange * 0.75f));
+            MoveEnemy(tower.transform.position + Vector3.right * (WorldRadius(tower) * 0.75f));
             SimulateStep();
             yield return WaitForLaunch(tower);
             TowerProjectile projectile = GetActiveProjectile(tower);
             Rigidbody body = projectile.GetComponent<Rigidbody>();
             Transform pool = projectile.transform.parent;
+            Enemy stats = enemy.GetComponent<Enemy>();
+            float healthBeforeHit = stats.CurrentHealth;
 
             // Advance real physics until the projectile collides with the real enemy collider.
             for (int step = 0; step < 150 && projectile.gameObject.activeSelf; step++)
                 SimulateStep();
 
             Assert.That(projectile.gameObject.activeSelf, Is.False, tower.name + " projectile failed to recycle on hit.");
+            Assert.That(stats.CurrentHealth, Is.EqualTo(healthBeforeHit - tower.TowerDamage).Within(0.001f));
+            Assert.That(stats.LastDamageType, Is.EqualTo(tower.DamageType));
+            tower.ProjectileHit(projectile, enemy);
+            Assert.That(stats.CurrentHealth, Is.EqualTo(healthBeforeHit - tower.TowerDamage).Within(0.001f),
+                "A duplicate trigger callback must not apply the same hit twice.");
             Assert.That(body.isKinematic, Is.True);
             Assert.That(projectile.transform.parent, Is.SameAs(pool));
             Assert.That(body.linearVelocity.sqrMagnitude, Is.LessThan(0.0001f));
@@ -188,7 +384,12 @@ public class TowerCombatTests
             yield return WaitForLaunch(tower);
             Assert.That(GetActiveProjectile(tower), Is.SameAs(projectile), tower.name + " should reuse its first free slot.");
             Assert.That(body.isKinematic, Is.False);
-            Assert.That(body.linearVelocity.magnitude,
+            if (tower is BomberTower)
+            {
+                Assert.That(body.useGravity, Is.True);
+                Assert.That(body.linearVelocity.y, Is.GreaterThan(0f), "Reused bombs must start a fresh upward arc.");
+            }
+            else Assert.That(body.linearVelocity.magnitude,
                 Is.EqualTo(ExpectedSpeed(tower)).Within(0.001f), tower.name + " reused projectile velocity");
         }
     }
@@ -196,7 +397,7 @@ public class TowerCombatTests
     private IEnumerator VerifyLaunchAndMotion(TowerBase tower, float speed)
     {
         yield return IsolateTower(tower);
-        MoveEnemy(tower.transform.position + Vector3.right * (tower.TowerRange * 0.75f));
+        MoveEnemy(tower.transform.position + Vector3.right * (WorldRadius(tower) * 0.75f));
         SimulateStep();
         yield return WaitForLaunch(tower);
         Assert.That(tower.EnemiesInRange, Does.Contain(enemy));
@@ -209,6 +410,92 @@ public class TowerCombatTests
         SimulateStep();
         Assert.That(Vector3.Distance(start, body.position), Is.EqualTo(speed * PhysicsStep).Within(0.005f));
         Assert.That(Vector3.Dot(body.position - start, enemy.transform.position - start), Is.GreaterThan(0f));
+    }
+
+    [UnityTest]
+    public IEnumerator LethalProjectileHitClearsHealthTargetAndProjectile()
+    {
+        TowerBase tower = towers.Single(t => t is ArcherTower);
+        yield return IsolateTower(tower);
+        Enemy stats = enemy.GetComponent<Enemy>();
+        stats.TakeDamage(stats.CurrentHealth - 1f, TowerData.TowerDamageType.Magic);
+        MoveEnemy(tower.transform.position + Vector3.right * (WorldRadius(tower) * 0.75f));
+        SimulateStep();
+        yield return WaitForLaunch(tower);
+        TowerProjectile projectile = GetActiveProjectile(tower);
+        for (int step = 0; step < 150 && projectile.gameObject.activeSelf; step++) SimulateStep();
+        Assert.That(stats.CurrentHealth, Is.Zero);
+        Assert.That(stats.IsDead, Is.True);
+        Assert.That(enemy.gameObject.activeSelf, Is.False);
+        Assert.That(projectile.gameObject.activeSelf, Is.False);
+        stats.TakeDamage(100f, TowerData.TowerDamageType.Magic);
+        Assert.That(stats.CurrentHealth, Is.Zero, "Health must not become negative after death.");
+        yield return null;
+        Assert.That(tower.EnemiesInRange, Is.Empty);
+        Assert.That(GetActiveProjectile(tower), Is.Null);
+    }
+
+    [UnityTest]
+    public IEnumerator EnemyStatsRemainAvailableWithoutHealthLogs()
+    {
+        Enemy stats = enemy.GetComponent<Enemy>();
+        Assert.That(stats.CurrentHealth, Is.EqualTo(stats.MaxHealth));
+        Assert.That(enemy.GetComponent<NavMeshAgent>().speed, Is.EqualTo(stats.MovementSpeed));
+        Assert.That(stats.AttackDamage, Is.EqualTo(10f));
+        Assert.That(stats.AttackSpeed, Is.EqualTo(1f));
+        Assert.That(stats.DamageType, Is.EqualTo(TowerData.TowerDamageType.Physical));
+        stats.TakeDamage(10f, TowerData.TowerDamageType.Physical);
+        var loggedMessages = new List<string>();
+        Application.LogCallback capture = (message, stack, type) =>
+        {
+            if (!message.StartsWith("[Enemy Health] " + enemy.gameObject.name + ": ")) return;
+            loggedMessages.Add(message);
+        };
+        Application.logMessageReceived += capture;
+        try
+        {
+            yield return new WaitForSeconds(2.1f);
+            Assert.That(loggedMessages, Is.Empty, "Health belongs in the UI, not in repeating console logs.");
+            Assert.That(stats.CurrentHealth, Is.EqualTo(90f));
+        }
+        finally
+        {
+            Application.logMessageReceived -= capture;
+        }
+    }
+
+    [UnityTest]
+    public IEnumerator DamageBrieflyChangesOnlyTheHitEnemyColorAndRestoresIt()
+    {
+        Enemy stats = enemy.GetComponent<Enemy>();
+        Renderer renderer = enemy.GetComponent<Renderer>();
+        Material shared = renderer.sharedMaterial;
+        int property = Shader.PropertyToID("_BaseColor");
+        Color original = shared.GetColor(property);
+        var untouched = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        untouched.transform.position = OutsideAllRanges + Vector3.right * 5f;
+        Renderer otherRenderer = untouched.GetComponent<Renderer>();
+        otherRenderer.sharedMaterial = shared;
+        stats.TakeDamage(1f, TowerData.TowerDamageType.Physical);
+        var block = new MaterialPropertyBlock();
+        renderer.GetPropertyBlock(block);
+        Assert.That(block.GetColor(property), Is.Not.EqualTo(original));
+        Assert.That(block.GetColor(property).r, Is.InRange(original.r, 1f));
+        Assert.That(shared.GetColor(property), Is.EqualTo(original), "Never recolor the shared enemy material.");
+        otherRenderer.GetPropertyBlock(block);
+        Assert.That(block.isEmpty, Is.True, "Unhurt enemies sharing the material must keep their own appearance.");
+        yield return new WaitForSeconds(0.1f);
+        stats.TakeDamage(1f, TowerData.TowerDamageType.Magic);
+        yield return new WaitForSeconds(0.1f);
+        renderer.GetPropertyBlock(block);
+        Assert.That(block.isEmpty, Is.False, "Another hit must restart the flash.");
+        yield return new WaitForSeconds(0.15f);
+        renderer.GetPropertyBlock(block);
+        Assert.That(block.isEmpty, Is.True, "The original renderer state must return after the flash.");
+        stats.TakeDamage(1f, TowerData.TowerDamageType.Physical);
+        enemy.gameObject.SetActive(false);
+        renderer.GetPropertyBlock(block);
+        Assert.That(block.isEmpty, Is.True, "Disabling an enemy must not leave a hit tint on it.");
     }
 
     private IEnumerator IsolateTower(TowerBase target)
@@ -243,6 +530,13 @@ public class TowerCombatTests
 
     private static Transform GetPool(TowerBase tower) => (Transform)typeof(TowerBase)
         .GetField("projectilePool", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(tower);
+
+    private static float WorldRadius(TowerBase tower)
+    {
+        Vector3 scale = tower.transform.lossyScale;
+        return tower.GetComponent<SphereCollider>().radius *
+            Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
+    }
 
     private static TowerProjectile[] GetProjectiles(TowerBase tower)
     {

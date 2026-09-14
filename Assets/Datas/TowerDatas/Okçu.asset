@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3f8a2d7c6b1e4a5f9d0c2b7e8f1a3002, type: 3}
   m_Name: Okçu
   m_EditorClassIdentifier: 
-  towerRange: 8
+  towerRange: 3.5
   towerLevel: 1
   towerAttackSpeed: 6
   towerDamage: 3

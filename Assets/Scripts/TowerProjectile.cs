@@ -13,6 +13,10 @@ public class TowerProjectile : MonoBehaviour // 1
     private bool initialized; // 1
     private bool launched; // 1
     private float remainingLifetime; // 1
+    private Vector3 mortarLandingPosition;
+    private float mortarImpactHeight;
+
+    public bool IsMortar { get; private set; }
 
     /// <summary>Projectile'ın fizik ve başlangıç değerlerini kaydedip havuza hazırlar.</summary> // 1
     public void Initialize() // 1
@@ -27,6 +31,7 @@ public class TowerProjectile : MonoBehaviour // 1
         if (body == null) return; // 1
         owner = projectileOwner; // 1
         launched = true; // 1
+        IsMortar = false;
         remainingLifetime = MaxLifetime; // 1
         body.isKinematic = false; // 1
         body.useGravity = false; // 1
@@ -38,10 +43,31 @@ public class TowerProjectile : MonoBehaviour // 1
         body.WakeUp(); // 1
     }
 
+    public void LaunchMortar(TowerBase projectileOwner, Vector3 destination, float flightTime)
+    {
+        Vector3 velocity = (destination - transform.position - 0.5f * Physics.gravity * flightTime * flightTime) / flightTime;
+        Launch(projectileOwner, velocity.normalized, velocity.magnitude);
+        IsMortar = true;
+        mortarLandingPosition = destination;
+        Vector3 scale = transform.lossyScale;
+        mortarImpactHeight = destination.y + GetComponent<SphereCollider>().radius *
+            Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
+        body.useGravity = true;
+        body.linearDamping = 0f;
+    }
+
     /// <summary>Hedefe ulaşamayan projectile'ı güvenli bir süre sonunda geri döndürür.</summary> // 1
     private void Update() // 1
     {
         if (!launched) return; // 1
+        if (IsMortar && owner != null && body.linearVelocity.y < 0f && body.position.y <= mortarImpactHeight)
+        {
+            // Detonate at the planned ground point even when the path is render-only geometry.
+            body.position = mortarLandingPosition;
+            transform.position = mortarLandingPosition;
+            owner.ProjectileGroundImpact(this);
+            return;
+        }
         remainingLifetime -= Time.deltaTime; // 1
         if (owner == null || remainingLifetime <= 0f) // 1
         {
@@ -55,6 +81,7 @@ public class TowerProjectile : MonoBehaviour // 1
     {
         CacheInitialState(); // 1
         launched = false; // 1
+        IsMortar = false;
         remainingLifetime = 0f; // 1
         owner = null; // 1
         if (body != null) // 1
@@ -86,6 +113,9 @@ public class TowerProjectile : MonoBehaviour // 1
         if (!launched) return; // 1
         PathEnemy enemy = other.GetComponentInParent<PathEnemy>(); // 1
         if (enemy != null && owner != null) owner.ProjectileHit(this, enemy); // 1
+        else if (IsMortar && owner != null && body.linearVelocity.y < 0f && !other.isTrigger
+            && other.GetComponentInParent<TowerBase>() == null && other.GetComponentInParent<TowerProjectile>() == null)
+            owner.ProjectileGroundImpact(this);
     }
 
     /// <summary>Havuz konumunu yalnızca bir kez kaydeder ve projectile collider'ını hazırlar.</summary> // 1

@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using System;
 using UnityEngine;
+using UnityEngine.AI;
 
 /// <summary>
 /// Common parent component for every tower in the game.
@@ -15,33 +17,58 @@ public class TowerBase : MonoBehaviour
     [Header("Projectile Pool")] // 1
     [SerializeField] private Transform projectilePool; // 1
 
+    [Header("Level 2 Upgrade")]
+    [SerializeField, Min(1)] private int levelTwoCost = 30;
+    [SerializeField, Min(1f)] private float levelTwoRangeMultiplier = 1.25f;
+    [SerializeField, Min(1f)] private float levelTwoAttackSpeedMultiplier = 1.15f;
+    [SerializeField, Min(1f)] private float levelTwoDamageMultiplier = 1.25f;
+
     private readonly List<PathEnemy> enemiesInRange = new List<PathEnemy>();
     private readonly Dictionary<TowerProjectile, PathEnemy> activeProjectiles = new Dictionary<TowerProjectile, PathEnemy>(); // 1
     private readonly List<TowerProjectile> completedProjectiles = new List<TowerProjectile>(); // 1
     private float attackTimer; // 1
+    private int currentLevel;
 
     public TowerData Data => towerData;
 
     public IReadOnlyList<PathEnemy> EnemiesInRange => enemiesInRange;
 
-    public float TowerRange => towerData?.TowerRange ?? 0f;
+    public float TowerRange => (towerData?.TowerRange ?? 0f) * CurrentMultiplier(levelTwoRangeMultiplier);
 
-    public int TowerLevel => towerData?.TowerLevel ?? 1;
+    public int TowerLevel => currentLevel > 0 ? currentLevel : towerData?.TowerLevel ?? 1;
 
-    public float TowerAttackSpeed => towerData?.TowerAttackSpeed ?? 0f;
+    public float TowerAttackSpeed => (towerData?.TowerAttackSpeed ?? 0f) * CurrentMultiplier(levelTwoAttackSpeedMultiplier);
 
-    public float TowerDamage => towerData?.TowerDamage ?? 0f;
+    public float TowerDamage => (towerData?.TowerDamage ?? 0f) * CurrentMultiplier(levelTwoDamageMultiplier);
+
+    public int UpgradeCost => levelTwoCost;
+
+    public bool CanUpgrade => TowerLevel < 2;
 
     public TowerData.TowerDamageType DamageType => towerData?.DamageType ?? TowerData.TowerDamageType.Physical;
+
+    public event Action<TowerBase> Upgraded;
 
     /// <summary>Alt kulelerin kendi projectile hızını ortak fırlatma sistemine vermesini sağlar.</summary> // 1
     protected virtual float GetProjectileVelocity() => 10f; // 1
 
     protected virtual void Awake() // 1
     {
+        currentLevel = Mathf.Clamp(towerData?.TowerLevel ?? 1, 1, 2);
         SyncRangeCollider(); // 1
         InitializeProjectilePool(); // 1
     }
+
+    public bool TryUpgrade(PlayerGold playerGold)
+    {
+        if (!CanUpgrade || playerGold == null || !playerGold.TrySpendGold(UpgradeCost)) return false;
+        currentLevel = 2;
+        SyncRangeCollider();
+        Upgraded?.Invoke(this);
+        return true;
+    }
+
+    private float CurrentMultiplier(float levelTwoMultiplier) => TowerLevel >= 2 ? levelTwoMultiplier : 1f;
 
     protected virtual void OnValidate() => SyncRangeCollider();
 
@@ -116,14 +143,51 @@ public class TowerBase : MonoBehaviour
         TowerProjectile projectile = GetAvailableProjectile(); // 1
         if (projectile == null || target == null) return false; // 1
 
-        Vector3 direction = (target.transform.position - transform.position).normalized; // 1
+        float projectileSpeed = GetProjectileVelocity();
+        Vector3 direction = GetInterceptDirection(target, projectileSpeed);
         if (direction == Vector3.zero) return false; // 1
 
         activeProjectiles[projectile] = target; // 1
         projectile.transform.SetPositionAndRotation(transform.position, Quaternion.LookRotation(direction)); // 1
         projectile.gameObject.SetActive(true); // 1
-        projectile.Launch(this, direction, GetProjectileVelocity()); // 1
+        LaunchProjectileMotion(projectile, target, direction, projectileSpeed);
         return true; // 1
+    }
+
+    protected virtual void LaunchProjectileMotion(TowerProjectile projectile, PathEnemy target, Vector3 direction, float speed) =>
+        projectile.Launch(this, direction, speed);
+
+    private Vector3 GetInterceptDirection(PathEnemy target, float projectileSpeed)
+    {
+        Vector3 offset = target.transform.position - transform.position;
+        NavMeshAgent targetAgent = target.GetComponent<NavMeshAgent>();
+        if (targetAgent == null || !targetAgent.isActiveAndEnabled || !targetAgent.isOnNavMesh)
+            return offset.normalized;
+
+        // Lead a moving target while keeping the projectile's own constant velocity.
+        Vector3 targetVelocity = targetAgent.velocity;
+        float a = targetVelocity.sqrMagnitude - projectileSpeed * projectileSpeed;
+        float b = 2f * Vector3.Dot(offset, targetVelocity);
+        float c = offset.sqrMagnitude;
+        float interceptTime = float.PositiveInfinity;
+        if (Mathf.Abs(a) < 0.0001f)
+        {
+            if (b < -0.0001f) interceptTime = -c / b;
+        }
+        else
+        {
+            float discriminant = b * b - 4f * a * c;
+            if (discriminant >= 0f)
+            {
+                float root = Mathf.Sqrt(discriminant);
+                float first = (-b - root) / (2f * a);
+                float second = (-b + root) / (2f * a);
+                if (first > 0f) interceptTime = first;
+                if (second > 0f) interceptTime = Mathf.Min(interceptTime, second);
+            }
+        }
+        if (!float.IsInfinity(interceptTime)) offset += targetVelocity * interceptTime;
+        return offset.normalized;
     }
 
     /// <summary>Havuzda kullanılmayan ilk projectile nesnesini bulur.</summary> // 1
@@ -143,8 +207,24 @@ public class TowerBase : MonoBehaviour
     /// <summary>Çarpan projectile nesnesini kendi havuzuna geri koyar.</summary> // 1
     public void ProjectileHit(TowerProjectile projectile, PathEnemy target) // 1
     {
-        if (!activeProjectiles.TryGetValue(projectile, out PathEnemy currentTarget) || currentTarget != target) return; // 1
+        if (target == null || !activeProjectiles.TryGetValue(projectile, out PathEnemy currentTarget)
+            || !CanHitEnemy(currentTarget, target)) return;
+        Vector3 impactPosition = projectile.transform.position;
         RecycleProjectile(projectile); // 1
+        ApplyProjectileDamage(target, impactPosition);
+    }
+
+    protected virtual bool CanHitEnemy(PathEnemy intendedTarget, PathEnemy hitEnemy) => intendedTarget == hitEnemy;
+
+    protected virtual void ApplyProjectileDamage(PathEnemy target, Vector3 impactPosition) =>
+        target?.GetComponent<Enemy>()?.TakeDamage(TowerDamage, DamageType);
+
+    public void ProjectileGroundImpact(TowerProjectile projectile)
+    {
+        if (projectile == null || !projectile.IsMortar || !activeProjectiles.ContainsKey(projectile)) return;
+        Vector3 impactPosition = projectile.transform.position;
+        RecycleProjectile(projectile);
+        ApplyProjectileDamage(null, impactPosition);
     }
 
     /// <summary>Projectile nesnesini fizik değerleri sıfırlanmış halde havuza gönderir.</summary> // 1
@@ -167,7 +247,7 @@ public class TowerBase : MonoBehaviour
         completedProjectiles.Clear(); // 1
         foreach (KeyValuePair<TowerProjectile, PathEnemy> activeProjectile in activeProjectiles) // 1
         {
-            if (activeProjectile.Value == null || !activeProjectile.Value.isActiveAndEnabled)
+            if (!activeProjectile.Key.IsMortar && (activeProjectile.Value == null || !activeProjectile.Value.isActiveAndEnabled))
                 completedProjectiles.Add(activeProjectile.Key);
         }
 
@@ -179,8 +259,16 @@ public class TowerBase : MonoBehaviour
 
     private bool IsEnemyInRange(PathEnemy enemy)
     {
-        return enemy != null && enemy.isActiveAndEnabled && TowerRange > 0f
-            && (enemy.transform.position - transform.position).sqrMagnitude <= TowerRange * TowerRange;
+        if (enemy == null || !enemy.isActiveAndEnabled || TowerRange <= 0f) return false;
+        Enemy stats = enemy.GetComponent<Enemy>();
+        if (stats != null && (stats.IsWaiting || stats.IsDead)) return false;
+
+        SphereCollider rangeCollider = GetComponent<SphereCollider>();
+        Vector3 worldScale = transform.lossyScale;
+        float largestScale = Mathf.Max(Mathf.Abs(worldScale.x), Mathf.Abs(worldScale.y), Mathf.Abs(worldScale.z));
+        float worldRadius = rangeCollider.radius * largestScale;
+        Vector3 worldCenter = transform.TransformPoint(rangeCollider.center);
+        return (enemy.transform.position - worldCenter).sqrMagnitude <= worldRadius * worldRadius;
     }
 
     /// <summary>Kule kapanırken kendi aktif projectile nesnelerini havuza iade eder.</summary> // 1
@@ -199,9 +287,8 @@ public class TowerBase : MonoBehaviour
     private void SyncRangeCollider()
     {
         SphereCollider rangeCollider = GetComponent<SphereCollider>();
-        Vector3 worldScale = transform.lossyScale; // 1
-        float largestScale = Mathf.Max(Mathf.Abs(worldScale.x), Mathf.Abs(worldScale.y), Mathf.Abs(worldScale.z));
-        rangeCollider.radius = largestScale > 0f ? TowerRange / largestScale : TowerRange;
+        // Tower data defines the Inspector Radius; Unity applies the Transform scale.
+        rangeCollider.radius = TowerRange;
         rangeCollider.isTrigger = true;
     }
 }
