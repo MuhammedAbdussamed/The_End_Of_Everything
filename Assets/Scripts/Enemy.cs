@@ -29,6 +29,10 @@ public class Enemy : MonoBehaviour
     }
     private HitRenderer[] hitRenderers;
     private float hitFlashRemaining;
+    private float slowRemaining;
+    private float slowDuration;
+    private float slowStartMultiplier = 1f;
+    private NavMeshAgent agent;
 
     [Header("Runtime Health")]
     [SerializeField] private float currentHealth;
@@ -36,6 +40,15 @@ public class Enemy : MonoBehaviour
     public float MaxHealth => maxHealth;
     public float CurrentHealth => currentHealth;
     public float MovementSpeed => movementSpeed;
+    public float CurrentMovementSpeed => Agent != null ? Agent.speed : movementSpeed;
+    public NavMeshAgent Agent
+    {
+        get
+        {
+            if (agent == null) TryGetComponent(out agent);
+            return agent;
+        }
+    }
     public float AttackDamage => attackDamage;
     public float BaseDamage => baseDamage;
     public int GoldReward => goldReward;
@@ -45,10 +58,12 @@ public class Enemy : MonoBehaviour
     public bool IsDead => currentHealth <= 0f;
     public bool IsWaiting { get; private set; }
     public bool IsLarge { get; private set; }
+    public bool IsSlowed => slowRemaining > 0f;
     public event Action<Enemy> Removed;
 
     private void Awake()
     {
+        agent = GetComponent<NavMeshAgent>();
         currentHealth = maxHealth;
         SyncMovementSpeed();
         CacheHitRenderers();
@@ -57,15 +72,20 @@ public class Enemy : MonoBehaviour
     private void OnDisable()
     {
         RestoreHitColors();
+        ClearSlow();
         Removed?.Invoke(this);
     }
 
     private void Update()
     {
-        if (hitFlashRemaining <= 0f) return;
-        hitFlashRemaining = Mathf.Max(0f, hitFlashRemaining - Time.deltaTime);
-        if (hitFlashRemaining == 0f) RestoreHitColors();
-        else ApplyHitColors(hitFlashStrength * hitFlashRemaining / hitFlashDuration);
+        if (hitFlashRemaining > 0f)
+        {
+            hitFlashRemaining = Mathf.Max(0f, hitFlashRemaining - Time.deltaTime);
+            if (hitFlashRemaining == 0f) RestoreHitColors();
+            else ApplyHitColors(hitFlashStrength * hitFlashRemaining / hitFlashDuration);
+        }
+
+        UpdateSlow();
     }
 
     private void CacheHitRenderers()
@@ -119,20 +139,54 @@ public class Enemy : MonoBehaviour
         movementSpeed *= 0.6f;
         baseDamage *= 2f;
         goldReward *= 2;
-        NavMeshAgent agent = GetComponent<NavMeshAgent>();
-        float previousWorldOffset = agent.baseOffset * transform.lossyScale.y;
+        NavMeshAgent navigation = Agent;
+        float previousWorldOffset = navigation.baseOffset * transform.lossyScale.y;
         transform.localScale *= 1.5f;
         // The agent already applies Transform scale; only lift the inactive staging pose here.
-        transform.position += Vector3.up * (agent.baseOffset * transform.lossyScale.y - previousWorldOffset);
+        transform.position += Vector3.up * (navigation.baseOffset * transform.lossyScale.y - previousWorldOffset);
         SyncMovementSpeed();
     }
 
-    private void OnValidate() => SyncMovementSpeed();
+    private void OnValidate()
+    {
+        if (agent == null) TryGetComponent(out agent);
+        SyncMovementSpeed();
+    }
 
     private void SyncMovementSpeed()
     {
-        NavMeshAgent agent = GetComponent<NavMeshAgent>();
-        if (agent != null) agent.speed = movementSpeed;
+        if (Agent != null) Agent.speed = movementSpeed;
+    }
+
+    public void ApplyDecayingSlow(float duration, float initialSpeedMultiplier)
+    {
+        if (!isActiveAndEnabled || IsDead || IsWaiting || duration <= 0f) return;
+        slowDuration = duration;
+        slowRemaining = duration;
+        slowStartMultiplier = Mathf.Clamp(initialSpeedMultiplier, 0.05f, 1f);
+        ApplyMovementMultiplier(slowStartMultiplier);
+    }
+
+    private void UpdateSlow()
+    {
+        if (slowRemaining <= 0f) return;
+        slowRemaining = Mathf.Max(0f, slowRemaining - Time.deltaTime);
+        float recovery = slowDuration > 0f ? 1f - slowRemaining / slowDuration : 1f;
+        ApplyMovementMultiplier(Mathf.Lerp(slowStartMultiplier, 1f, recovery));
+        if (slowRemaining == 0f) ClearSlow();
+    }
+
+    private void ApplyMovementMultiplier(float multiplier)
+    {
+        if (Agent != null) Agent.speed = movementSpeed * multiplier;
+    }
+
+    private void ClearSlow()
+    {
+        slowRemaining = 0f;
+        slowDuration = 0f;
+        slowStartMultiplier = 1f;
+        SyncMovementSpeed();
     }
 
     public void TakeDamage(float amount, TowerData.TowerDamageType incomingDamageType)
@@ -145,7 +199,6 @@ public class Enemy : MonoBehaviour
         ApplyHitColors(hitFlashStrength);
         if (!IsDead) return;
 
-        NavMeshAgent agent = GetComponent<NavMeshAgent>();
         if (agent.isActiveAndEnabled && agent.isOnNavMesh)
         {
             agent.isStopped = true;

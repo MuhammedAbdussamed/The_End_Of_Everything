@@ -32,4 +32,17 @@ public class TowerData : ScriptableObject
     public float TowerDamage => towerDamage;
 
     public TowerDamageType DamageType => damageType;
+
+    /// <summary>
+    /// Creates the data used by towers constructed during play without requiring
+    /// a hidden starter tower in the scene.
+    /// </summary>
+    public void ConfigureRuntime(float range, int level, float attackSpeed, float damage, TowerDamageType type)
+    {
+        towerRange = Mathf.Max(0.1f, range);
+        towerLevel = Mathf.Max(1, level);
+        towerAttackSpeed = Mathf.Max(0.01f, attackSpeed);
+        towerDamage = Mathf.Max(0f, damage);
+        damageType = type;
+    }
 }

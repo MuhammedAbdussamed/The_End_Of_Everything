@@ -58,6 +58,12 @@ public class TowerCombatTests
         Assert.That(enemyBody, Is.Not.Null);
         Assert.That(enemyBody.isKinematic, Is.True, "The moving enemy needs its trigger Rigidbody.");
         Assert.That(enemy.isActiveAndEnabled, Is.True);
+        BuildSite[] sites = Object.FindObjectsByType<BuildSite>(FindObjectsSortMode.None);
+        PlayerGold gold = Object.FindFirstObjectByType<PlayerGold>();
+        Assert.That(sites.Length, Is.GreaterThanOrEqualTo(3));
+        Assert.That(sites[0].TryBuild(BuildSite.TowerKind.Archer, gold), Is.True);
+        Assert.That(sites[1].TryBuild(BuildSite.TowerKind.Mage, gold), Is.True);
+        Assert.That(sites[2].TryBuild(BuildSite.TowerKind.Bomber, gold), Is.True);
         towers = Object.FindObjectsByType<TowerBase>(FindObjectsSortMode.None);
         Assert.That(towers.Length, Is.EqualTo(3));
         MoveEnemy(OutsideAllRanges);
@@ -86,7 +92,7 @@ public class TowerCombatTests
     }
 
     [Test]
-    public void SceneTowersHaveIndependentPoolsAndPreserveConfiguredColliderRadius()
+    public void ConstructedTowersHaveIndependentPoolsAndPreserveConfiguredColliderRadius()
     {
         var pools = new HashSet<Transform>();
         foreach (TowerBase tower in towers)
@@ -159,7 +165,7 @@ public class TowerCombatTests
         Assert.That(highest, Is.GreaterThan(startHeight + 3f), "Mortar must visibly arc over the path.");
         Assert.That(fell, Is.True);
         Assert.That(projectile.gameObject.activeSelf, Is.False);
-        Assert.That(enemy.GetComponent<Enemy>().CurrentHealth, Is.EqualTo(80f));
+        Assert.That(enemy.GetComponent<Enemy>().CurrentHealth, Is.EqualTo(65f));
         Assert.That(projectile.IsMortar, Is.False);
         Assert.That(body.useGravity, Is.False, "Pool return must clear the ballistic state.");
     }
@@ -172,7 +178,7 @@ public class TowerCombatTests
         Assert.That(bomber.BlastRadius, Is.EqualTo(3f));
         Assert.That(bomber.DamageType, Is.EqualTo(TowerData.TowerDamageType.Physical));
         Assert.That(GetProjectiles(bomber).Length, Is.EqualTo(8));
-        Assert.That(1f / bomber.TowerAttackSpeed, Is.EqualTo(1.5f).Within(0.0001f));
+        Assert.That(1f / bomber.TowerAttackSpeed, Is.EqualTo(2.222222f).Within(0.0001f));
         foreach (TowerBase other in towers.Where(t => t != bomber))
         {
             Assert.That(bomber.TowerDamage, Is.GreaterThan(other.TowerDamage));
@@ -213,10 +219,10 @@ public class TowerCombatTests
         for (int step = 0; step < 150 && projectile.gameObject.activeSelf; step++) SimulateStep();
 
         Assert.That(projectile.gameObject.activeSelf, Is.False);
-        Assert.That(enemy.GetComponent<Enemy>().CurrentHealth, Is.EqualTo(80f));
+        Assert.That(enemy.GetComponent<Enemy>().CurrentHealth, Is.EqualTo(65f));
         foreach (Enemy splashTarget in nearby)
         {
-            Assert.That(splashTarget.CurrentHealth, Is.EqualTo(80f), "Every enemy must receive exactly one splash hit.");
+            Assert.That(splashTarget.CurrentHealth, Is.EqualTo(65f), "Every enemy must receive exactly one splash hit.");
             Assert.That(splashTarget.LastDamageType, Is.EqualTo(TowerData.TowerDamageType.Physical));
         }
         Assert.That(outside.CurrentHealth, Is.EqualTo(100f));
@@ -225,7 +231,7 @@ public class TowerCombatTests
         Assert.That(lethal.IsDead, Is.True);
         Assert.That(lethal.gameObject.activeSelf, Is.False);
         bomber.ProjectileHit(projectile, enemy);
-        Assert.That(nearby.All(e => e.CurrentHealth == 80f), Is.True, "Duplicate callbacks must not explode twice.");
+        Assert.That(nearby.All(e => e.CurrentHealth == 65f), Is.True, "Duplicate callbacks must not explode twice.");
         BombExplosionVisual visual = Object.FindFirstObjectByType<BombExplosionVisual>();
         Assert.That(visual, Is.Not.Null);
         Assert.That(Vector3.Distance(visual.transform.position, targetPosition), Is.LessThan(1f), "Explosion must use the impact position before the bomb returns to the pool.");
@@ -254,7 +260,7 @@ public class TowerCombatTests
         Assert.That(projectile.gameObject.activeSelf, Is.False);
         Assert.That(blocker.CurrentHealth, Is.EqualTo(100f));
         Assert.That(adjacent.CurrentHealth, Is.EqualTo(100f));
-        Assert.That(enemy.GetComponent<Enemy>().CurrentHealth, Is.EqualTo(80f), "The shell must land at the distant target after passing above the blocker.");
+        Assert.That(enemy.GetComponent<Enemy>().CurrentHealth, Is.EqualTo(65f), "The shell must land at the distant target after passing above the blocker.");
     }
 
     [UnityTest]
@@ -277,13 +283,13 @@ public class TowerCombatTests
             yield return null;
         }
         Assert.That(projectile.gameObject.activeSelf, Is.False, "The landing point must detonate a shell even on a path made of render-only geometry.");
-        Assert.That(nearby.CurrentHealth, Is.EqualTo(80f));
+        Assert.That(nearby.CurrentHealth, Is.EqualTo(65f));
         bomber.ProjectileGroundImpact(projectile);
-        Assert.That(nearby.CurrentHealth, Is.EqualTo(80f), "Ground callbacks must not detonate the same shell twice.");
+        Assert.That(nearby.CurrentHealth, Is.EqualTo(65f), "Ground callbacks must not detonate the same shell twice.");
     }
 
     [UnityTest]
-    public IEnumerator BomberWaitsOneAndAHalfSecondsBetweenShots()
+    public IEnumerator BomberWaitsMoreThanTwoSecondsBetweenShots()
     {
         BomberTower bomber = towers.OfType<BomberTower>().Single();
         yield return IsolateTower(bomber);
@@ -292,7 +298,7 @@ public class TowerCombatTests
         yield return WaitForLaunch(bomber);
         // Physics is paused, so both shots stay in flight and the pool reveals the actual firing interval.
         float launchedAt = Time.time;
-        while (Time.time - launchedAt < 1.35f)
+        while (Time.time - launchedAt < 2.05f)
         {
             Assert.That(GetProjectiles(bomber).Count(p => p.gameObject.activeSelf), Is.EqualTo(1));
             yield return null;
@@ -300,7 +306,35 @@ public class TowerCombatTests
         float deadline = Time.realtimeSinceStartup + 1f;
         while (GetProjectiles(bomber).Count(p => p.gameObject.activeSelf) < 2 && Time.realtimeSinceStartup < deadline) yield return null;
         Assert.That(GetProjectiles(bomber).Count(p => p.gameObject.activeSelf), Is.EqualTo(2));
-        Assert.That(Time.time - launchedAt, Is.InRange(1.45f, 1.7f));
+        Assert.That(Time.time - launchedAt, Is.InRange(2.15f, 2.45f));
+    }
+
+    [UnityTest]
+    public IEnumerator MageHitSlowsThenSmoothlyRestoresEnemySpeedInHalfASecond()
+    {
+        MageTower mage = towers.OfType<MageTower>().Single();
+        yield return IsolateTower(mage);
+        MoveEnemy(mage.transform.position + Vector3.right * (WorldRadius(mage) * 0.75f));
+        SimulateStep();
+        yield return WaitForLaunch(mage);
+
+        Enemy stats = enemy.GetComponent<Enemy>();
+        float normalSpeed = stats.MovementSpeed;
+        float healthBeforeHit = stats.CurrentHealth;
+        for (int step = 0; step < 150 && stats.CurrentHealth >= healthBeforeHit; step++) SimulateStep();
+
+        mage.enabled = false;
+        float initialSlowedSpeed = stats.CurrentMovementSpeed;
+        Assert.That(stats.IsSlowed, Is.True);
+        Assert.That(initialSlowedSpeed, Is.EqualTo(normalSpeed * 0.45f).Within(0.01f));
+
+        yield return new WaitForSeconds(0.25f);
+        Assert.That(stats.CurrentMovementSpeed, Is.GreaterThan(initialSlowedSpeed));
+        Assert.That(stats.CurrentMovementSpeed, Is.LessThan(normalSpeed));
+
+        yield return new WaitForSeconds(0.3f);
+        Assert.That(stats.IsSlowed, Is.False);
+        Assert.That(stats.CurrentMovementSpeed, Is.EqualTo(normalSpeed).Within(0.01f));
     }
 
     private static Enemy CreateSplashEnemy(Vector3 position)

@@ -21,6 +21,17 @@ public class WaveFlowTests
     private Random.State previousRandom;
     private SimulationMode previousPhysics;
 
+    [TestCase(100f, 3)]
+    [TestCase(75f, 3)]
+    [TestCase(74.9f, 2)]
+    [TestCase(50f, 2)]
+    [TestCase(49.9f, 1)]
+    [TestCase(0f, 1)]
+    public void WinStarsFollowRemainingHealth(float health, int expectedStars)
+    {
+        Assert.That(GameHud.CalculateWinStars(health), Is.EqualTo(expectedStars));
+    }
+
     [UnitySetUp]
     public IEnumerator LoadScene()
     {
@@ -69,9 +80,11 @@ public class WaveFlowTests
         Assert.That(waves.State, Is.EqualTo(WaveController.WaveState.Preparing));
         Assert.That(hud.WaveLabel, Is.EqualTo("1 / 3"));
         Assert.That(hud.HealthLabel, Is.EqualTo("100 / 100"));
-        Assert.That(hud.GoldLabel, Is.EqualTo("0"));
+        Assert.That(hud.GoldLabel, Is.EqualTo("300"));
         Assert.That(hud.ResultVisible, Is.False);
-        Enemy waiting = waves.ActiveEnemies.Single();
+        Assert.That(waves.ActiveEnemies.Count, Is.EqualTo(4));
+        Assert.That(waves.ActiveEnemies.All(enemy => enemy.IsWaiting), Is.True);
+        Enemy waiting = waves.ActiveEnemies.First();
         Assert.That(waiting.IsWaiting, Is.True);
         Assert.That(waiting.GetComponent<PathEnemy>().enabled, Is.False);
         Assert.That(waiting.GetComponent<NavMeshAgent>().enabled, Is.False);
@@ -86,13 +99,13 @@ public class WaveFlowTests
         Assert.That(waiting.CurrentHealth, Is.EqualTo(waiting.MaxHealth), "Waiting enemies must not be attacked before release.");
 
         Time.timeScale = 5f;
-        int[] counts = { 1, 3, 5 };
+        int[] counts = { 4, 8, 12 };
         for (int wave = 1; wave <= 3; wave++)
         {
             yield return WaitForWave(wave);
             Assert.That(waves.RemainingEnemies, Is.EqualTo(counts[wave - 1]));
             Assert.That(hud.WaveLabel, Is.EqualTo($"{wave} / 3"));
-            Assert.That(waves.ActiveEnemies.Count(e => e.IsLarge), Is.EqualTo(wave - 1));
+            Assert.That(waves.ActiveEnemies.Count(e => e.IsLarge), Is.EqualTo((wave - 1) * 2));
             foreach (Enemy spawned in waves.ActiveEnemies)
             {
                 float healthMultiplier = spawned.IsLarge ? 2f : 1f;
@@ -136,20 +149,21 @@ public class WaveFlowTests
         Assert.That(waves.RemainingEnemies, Is.Zero);
         Assert.That(health.CurrentHealth, Is.EqualTo(100f), "Killed enemies must not damage the player.");
         Assert.That(hud.WaveLabel, Is.EqualTo("3 / 3"));
-        Assert.That(hud.GoldLabel, Is.EqualTo("120"));
+        Assert.That(hud.GoldLabel, Is.EqualTo("600"));
         Assert.That(hud.ResultVisible, Is.True);
-        Assert.That(hud.ResultLabel, Is.EqualTo("Win"));
+        Assert.That(hud.ResultLabel, Is.EqualTo("KAZANDIN"));
+        Assert.That(hud.ResultDetailsLabel, Does.Contain("★  ★  ★"));
     }
 
     [UnityTest]
     public IEnumerator EscapingEnemiesFinishAllThreeWavesAndReducePlayerHealth()
     {
-        // Give this isolated test enough health to observe all nine escapes (120 total base damage).
-        typeof(PlayerHealth).GetField("maxHealth", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(health, 200f);
-        typeof(PlayerHealth).GetProperty("CurrentHealth").SetValue(health, 200f);
+        // Give this isolated test enough health to observe all 24 escapes (300 total base damage).
+        typeof(PlayerHealth).GetField("maxHealth", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(health, 500f);
+        typeof(PlayerHealth).GetProperty("CurrentHealth").SetValue(health, 500f);
         Time.timeScale = 6f;
-        int[] counts = { 1, 3, 5 };
-        float expectedHealth = 200f;
+        int[] counts = { 4, 8, 12 };
+        float expectedHealth = 500f;
         for (int wave = 1; wave <= 3; wave++)
         {
             yield return WaitForWave(wave);
@@ -159,20 +173,22 @@ public class WaveFlowTests
                 typeof(Enemy).GetField("attackDamage", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(spawned, 999f);
             yield return WaitForWaveToFinish(wave);
             Assert.That(health.CurrentHealth, Is.EqualTo(expectedHealth), "Escapes must use BaseDamage even when AttackDamage is 999.");
-            Assert.That(hud.HealthLabel, Is.EqualTo($"{expectedHealth:0.#} / 200"));
+            Assert.That(hud.HealthLabel, Is.EqualTo($"{expectedHealth:0.#} / 500"));
         }
         Assert.That(waves.State, Is.EqualTo(WaveController.WaveState.Completed));
         Assert.That(waves.RemainingEnemies, Is.Zero);
-        Assert.That(health.CurrentHealth, Is.EqualTo(80f));
+        Assert.That(health.CurrentHealth, Is.EqualTo(200f));
         Assert.That(hud.WaveLabel, Is.EqualTo("3 / 3"));
-        Assert.That(hud.GoldLabel, Is.EqualTo("0"), "Escaped enemies must not award gold.");
+        Assert.That(hud.GoldLabel, Is.EqualTo("300"), "Escaped enemies must not award gold.");
         Assert.That(hud.ResultVisible, Is.True);
-        Assert.That(hud.ResultLabel, Is.EqualTo("Win"));
+        Assert.That(hud.ResultLabel, Is.EqualTo("KAZANDIN"));
     }
 
     [UnityTest]
     public IEnumerator KillsAndEscapesTogetherCompleteAWave()
     {
+        typeof(PlayerHealth).GetField("maxHealth", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(health, 400f);
+        typeof(PlayerHealth).GetProperty("CurrentHealth").SetValue(health, 400f);
         Time.timeScale = 6f;
         for (int wave = 1; wave <= 3; wave++)
         {
@@ -184,20 +200,20 @@ public class WaveFlowTests
             yield return WaitForWaveToFinish(wave);
         }
         Assert.That(waves.State, Is.EqualTo(WaveController.WaveState.Completed));
-        Assert.That(health.CurrentHealth, Is.EqualTo(40f));
-        Assert.That(hud.HealthLabel, Is.EqualTo("40 / 100"));
-        Assert.That(hud.GoldLabel, Is.EqualTo("60"));
+        Assert.That(health.CurrentHealth, Is.EqualTo(160f));
+        Assert.That(hud.HealthLabel, Is.EqualTo("160 / 400"));
+        Assert.That(hud.GoldLabel, Is.EqualTo("360"));
     }
 
     [UnityTest]
     public IEnumerator LosingDuringPreparationStopsReleaseAndShowsLoseImmediately()
     {
-        Enemy waiting = waves.ActiveEnemies.Single();
+        Enemy waiting = waves.ActiveEnemies.First();
         health.TakeDamage(1000f);
         Assert.That(health.CurrentHealth, Is.Zero);
         Assert.That(waves.State, Is.EqualTo(WaveController.WaveState.Defeated));
         Assert.That(hud.ResultVisible, Is.True);
-        Assert.That(hud.ResultLabel, Is.EqualTo("Lose"));
+        Assert.That(hud.ResultLabel, Is.EqualTo("KAYBETTİN"));
         Assert.That(hud.HealthLabel, Is.EqualTo("0 / 100"));
         Time.timeScale = 10f;
         yield return new WaitForSeconds(5f);
@@ -205,8 +221,8 @@ public class WaveFlowTests
         Assert.That(waiting.IsWaiting, Is.True);
         Assert.That(waiting.GetComponent<NavMeshAgent>().enabled, Is.False);
         waiting.TakeDamage(999f, TowerData.TowerDamageType.Physical);
-        Assert.That(hud.GoldLabel, Is.EqualTo("0"));
-        Assert.That(hud.ResultLabel, Is.EqualTo("Lose"));
+        Assert.That(hud.GoldLabel, Is.EqualTo("300"));
+        Assert.That(hud.ResultLabel, Is.EqualTo("KAYBETTİN"));
     }
 
     [UnityTest]
@@ -227,9 +243,9 @@ public class WaveFlowTests
         while (waves.State != WaveController.WaveState.Defeated && Time.realtimeSinceStartup < deadline) yield return null;
         Assert.That(waves.State, Is.EqualTo(WaveController.WaveState.Defeated));
         Assert.That(waves.RemainingEnemies, Is.Zero);
-        Assert.That(hud.GoldLabel, Is.EqualTo("100"));
+        Assert.That(hud.GoldLabel, Is.EqualTo("580"));
         Assert.That(hud.ResultVisible, Is.True);
-        Assert.That(hud.ResultLabel, Is.EqualTo("Lose"));
+        Assert.That(hud.ResultLabel, Is.EqualTo("KAYBETTİN"));
         yield return null;
         Assert.That(waves.State, Is.EqualTo(WaveController.WaveState.Defeated));
     }

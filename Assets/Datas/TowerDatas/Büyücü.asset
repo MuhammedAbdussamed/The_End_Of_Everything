@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   towerRange: 3
   towerLevel: 1
-  towerAttackSpeed: 4.5
-  towerDamage: 7
+  towerAttackSpeed: 0.6666667
+  towerDamage: 28
   damageType: 1
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}

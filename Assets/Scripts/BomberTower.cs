@@ -16,6 +16,8 @@ public class BomberTower : TowerBase
 
     public float BlastRadius => (Data as BomberTowerData)?.BlastRadius ?? 0f;
 
+    public void ConfigureExplosionVisual(BombExplosionVisual visual) => explosionVisual = visual;
+
     protected override void Awake()
     {
         base.Awake();
@@ -28,7 +30,7 @@ public class BomberTower : TowerBase
     {
         Vector3 start = projectile.transform.position;
         Vector3 destination = target.transform.position;
-        NavMeshAgent agent = target.GetComponent<NavMeshAgent>();
+        NavMeshAgent agent = target.Agent;
         Vector3 targetVelocity = agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh ? agent.velocity : Vector3.zero;
         float flightTime = GetFlightTime(start, destination, speed);
         // Lead moving enemies; the landing point stays fixed once the shell leaves the tower.
@@ -57,14 +59,14 @@ public class BomberTower : TowerBase
 
     protected override bool CanHitEnemy(PathEnemy intendedTarget, PathEnemy hitEnemy)
     {
-        Enemy enemy = hitEnemy.GetComponent<Enemy>();
+        Enemy enemy = hitEnemy.Stats;
         return hitEnemy.isActiveAndEnabled && IsDamageable(enemy);
     }
 
     protected override void ApplyProjectileDamage(PathEnemy target, Vector3 impactPosition)
     {
         explosionTargets.Clear();
-        Enemy directTarget = target != null ? target.GetComponent<Enemy>() : null;
+        Enemy directTarget = target != null ? target.Stats : null;
         if (IsDamageable(directTarget)) explosionTargets.Add(directTarget);
 
         int count;

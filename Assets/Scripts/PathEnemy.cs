@@ -16,17 +16,28 @@ public class PathEnemy : MonoBehaviour
     private NavMeshPath candidatePath;
     private NavMeshQueryFilter queryFilter;
     private bool hasMovementTarget;
+    private Enemy enemyStats;
 
     public int WaypointCount => waypoints?.Length ?? 0;
     public int CurrentWaypointIndex { get; private set; }
     public Vector3 CurrentTarget { get; private set; }
     public bool HasReachedDestination { get; private set; }
     public float WaypointReachDistance => waypointReachDistance;
+    public NavMeshAgent Agent => agent;
+    public Enemy Stats => enemyStats;
+
+    public void ConfigureRoute(NavMeshSurface surface, Transform routeRoot, PathWaypoint[] route)
+    {
+        pathSurface = surface;
+        waypointRoot = routeRoot;
+        waypoints = route;
+    }
 
     /// <summary>Ortak NavMesh'i hazırlar ve sıralı patika noktalarını takip etmeye başlar.</summary>
     private void Start()
     {
         agent = GetComponent<NavMeshAgent>();
+        enemyStats = GetComponent<Enemy>();
         pathSurface ??= FindFirstObjectByType<NavMeshSurface>();
         waypointRoot ??= GameObject.Find("Path Waypoints")?.transform;
 
@@ -37,7 +48,7 @@ public class PathEnemy : MonoBehaviour
         }
 
         // Hierarchy order is the route order; each enemy chooses its own offsets.
-        waypoints = waypointRoot.GetComponentsInChildren<PathWaypoint>();
+        waypoints ??= waypointRoot.GetComponentsInChildren<PathWaypoint>();
         if (waypoints.Length == 0)
         {
             Debug.LogError("Path Waypoints must contain at least one PathWaypoint.", this);

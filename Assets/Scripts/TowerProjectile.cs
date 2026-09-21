@@ -15,6 +15,7 @@ public class TowerProjectile : MonoBehaviour // 1
     private float remainingLifetime; // 1
     private Vector3 mortarLandingPosition;
     private float mortarImpactHeight;
+    private SphereCollider projectileCollider;
 
     public bool IsMortar { get; private set; }
 
@@ -50,7 +51,7 @@ public class TowerProjectile : MonoBehaviour // 1
         IsMortar = true;
         mortarLandingPosition = destination;
         Vector3 scale = transform.lossyScale;
-        mortarImpactHeight = destination.y + GetComponent<SphereCollider>().radius *
+        mortarImpactHeight = destination.y + projectileCollider.radius *
             Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
         body.useGravity = true;
         body.linearDamping = 0f;
@@ -122,7 +123,7 @@ public class TowerProjectile : MonoBehaviour // 1
     private void CacheInitialState() // 1
     {
         if (body == null) body = GetComponent<Rigidbody>(); // 1
-        SphereCollider projectileCollider = GetComponent<SphereCollider>(); // 1
+        if (projectileCollider == null) projectileCollider = GetComponent<SphereCollider>(); // 1
         if (projectileCollider != null) projectileCollider.isTrigger = true; // 1
         if (initialized) return; // 1
 

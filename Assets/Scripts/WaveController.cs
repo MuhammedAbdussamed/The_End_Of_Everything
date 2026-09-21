@@ -14,13 +14,15 @@ public class WaveController : MonoBehaviour
     [SerializeField] private NavMeshSurface pathSurface;
     [SerializeField] private PlayerHealth playerHealth;
     [SerializeField] private PlayerGold playerGold;
-    [SerializeField] private int[] waveSizes = { 1, 3, 5 };
-    [SerializeField] private int[] largeEnemiesPerWave = { 0, 1, 2 };
+    [SerializeField] private int[] waveSizes = { 4, 8, 12 };
+    [SerializeField] private int[] largeEnemiesPerWave = { 0, 2, 4 };
     [SerializeField, Min(0f)] private float preparationTime = 3f;
     [SerializeField, Min(0f)] private float releaseInterval = 0.6f;
     [SerializeField, Min(0.1f)] private float formationSpacing = 1.5f;
 
     private readonly List<Enemy> activeEnemies = new List<Enemy>();
+    private Transform waypointRoot;
+    private PathWaypoint[] sharedWaypoints;
     public Enemy EnemyTemplate => enemyTemplate;
     public Transform WaitingPoint => waitingPoint;
     public IReadOnlyList<Enemy> ActiveEnemies => activeEnemies;
@@ -66,6 +68,10 @@ public class WaveController : MonoBehaviour
         }
         enemyTemplate.gameObject.SetActive(false);
         if (pathSurface.navMeshData == null) pathSurface.BuildNavMesh();
+        waypointRoot = GameObject.Find("Path Waypoints")?.transform;
+        sharedWaypoints = waypointRoot != null ? waypointRoot.GetComponentsInChildren<PathWaypoint>() : null;
+        WaitForSeconds preparationDelay = new WaitForSeconds(preparationTime);
+        WaitForSeconds releaseDelay = new WaitForSeconds(releaseInterval);
 
         for (int waveIndex = 0; waveIndex < waveSizes.Length; waveIndex++)
         {
@@ -75,7 +81,7 @@ public class WaveController : MonoBehaviour
             int largeCount = waveIndex < largeEnemiesPerWave.Length ? Mathf.Clamp(largeEnemiesPerWave[waveIndex], 0, count) : 0;
             Enemy[] wave = PrepareWave(count, largeCount);
             SetState(WaveState.Preparing);
-            yield return new WaitForSeconds(preparationTime);
+            yield return preparationDelay;
             if (playerHealth.IsDefeated) break;
 
             SetState(WaveState.Active);
@@ -83,7 +89,7 @@ public class WaveController : MonoBehaviour
             {
                 if (playerHealth.IsDefeated) break;
                 if (wave[i] != null && wave[i].gameObject.activeSelf) ReleaseEnemy(wave[i]);
-                if (i + 1 < wave.Length) yield return new WaitForSeconds(releaseInterval);
+                if (i + 1 < wave.Length) yield return releaseDelay;
             }
             while (activeEnemies.Count > 0 && !playerHealth.IsDefeated) yield return null;
         }
@@ -100,8 +106,10 @@ public class WaveController : MonoBehaviour
                 0f, -(i / columns) * formationSpacing);
             Enemy enemy = Instantiate(enemyTemplate, waitingPoint.TransformPoint(offset), waitingPoint.rotation, transform);
             enemy.gameObject.name = $"Enemy Wave {CurrentWave} - {i + 1}";
-            enemy.GetComponent<PathEnemy>().enabled = false;
-            enemy.GetComponent<NavMeshAgent>().enabled = false;
+            PathEnemy pathEnemy = enemy.GetComponent<PathEnemy>();
+            pathEnemy.ConfigureRoute(pathSurface, waypointRoot, sharedWaypoints);
+            pathEnemy.enabled = false;
+            enemy.Agent.enabled = false;
             if ((i + 1) * largeCount / count > i * largeCount / count)
             {
                 enemy.ApplyLargeVariant();
@@ -118,7 +126,7 @@ public class WaveController : MonoBehaviour
 
     private void ReleaseEnemy(Enemy enemy)
     {
-        NavMeshAgent agent = enemy.GetComponent<NavMeshAgent>();
+        NavMeshAgent agent = enemy.Agent;
         agent.enabled = true;
         enemy.SetWaiting(false);
         enemy.GetComponent<PathEnemy>().enabled = true;

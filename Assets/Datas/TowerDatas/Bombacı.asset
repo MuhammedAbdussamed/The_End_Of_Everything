@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier:
   towerRange: 3.25
   towerLevel: 1
-  towerAttackSpeed: 0.6666667
-  towerDamage: 20
+  towerAttackSpeed: 0.45
+  towerDamage: 35
   damageType: 0
   blastRadius: 3
