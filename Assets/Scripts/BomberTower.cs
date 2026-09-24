@@ -6,8 +6,10 @@ using UnityEngine.AI;
 public class BomberTower : TowerBase
 {
     [Header("Bomb Settings")]
-    [SerializeField, Min(0.1f)] private float projectileVelocity = 12f;
+    [SerializeField, Min(0.1f)] private float projectileVelocity = 14f;
     [SerializeField, Min(0.5f)] private float arcHeight = 4f;
+    [SerializeField, Min(0.05f)] private float maxLeadTime = 0.75f;
+    [SerializeField, Min(0.1f)] private float navMeshSampleDistance = 3f;
     [SerializeField] private BombExplosionVisual explosionVisual;
 
     private Collider[] hitBuffer = new Collider[16];
@@ -15,6 +17,7 @@ public class BomberTower : TowerBase
     private int enemyMask;
 
     public float BlastRadius => (Data as BomberTowerData)?.BlastRadius ?? 0f;
+    public float ProjectileVelocity => projectileVelocity;
 
     public void ConfigureExplosionVisual(BombExplosionVisual visual) => explosionVisual = visual;
 
@@ -26,24 +29,67 @@ public class BomberTower : TowerBase
 
     protected override float GetProjectileVelocity() => projectileVelocity;
 
+    protected override PathEnemy SelectTarget(IReadOnlyList<PathEnemy> candidates)
+    {
+        PathEnemy fallback = null;
+        PathEnemy best = null;
+        int bestWaypoint = -1;
+        float bestRemainingDistance = float.PositiveInfinity;
+
+        foreach (PathEnemy candidate in candidates)
+        {
+            if (candidate == null || !candidate.isActiveAndEnabled || candidate.HasReachedDestination) continue;
+
+            Enemy enemy = candidate.Stats != null ? candidate.Stats : candidate.GetComponent<Enemy>();
+            if (!IsDamageable(enemy)) continue;
+            if (fallback == null) fallback = candidate;
+
+            NavMeshAgent agent = candidate.Agent;
+            if (agent == null || !agent.isActiveAndEnabled || !agent.isOnNavMesh) continue;
+
+            float remainingDistance = agent.pathPending || float.IsInfinity(agent.remainingDistance)
+                ? float.PositiveInfinity
+                : agent.remainingDistance;
+            if (best == null || candidate.CurrentWaypointIndex > bestWaypoint ||
+                (candidate.CurrentWaypointIndex == bestWaypoint && remainingDistance < bestRemainingDistance))
+            {
+                best = candidate;
+                bestWaypoint = candidate.CurrentWaypointIndex;
+                bestRemainingDistance = remainingDistance;
+            }
+        }
+
+        // Disabled agents are used by combat tests and can also occur briefly during spawning.
+        return best != null ? best : fallback;
+    }
+
     protected override void LaunchProjectileMotion(TowerProjectile projectile, PathEnemy target, Vector3 direction, float speed)
     {
         Vector3 start = projectile.transform.position;
-        Vector3 destination = target.transform.position;
+        Vector3 currentPosition = target.transform.position;
+        Vector3 destination = currentPosition;
         NavMeshAgent agent = target.Agent;
-        Vector3 targetVelocity = agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh ? agent.velocity : Vector3.zero;
-        float flightTime = GetFlightTime(start, destination, speed);
-        // Lead moving enemies; the landing point stays fixed once the shell leaves the tower.
-        for (int i = 0; i < 3; i++)
+        if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
         {
-            destination = target.transform.position + targetVelocity * flightTime;
-            flightTime = GetFlightTime(start, destination, speed);
+            float leadTime = Mathf.Min(GetFlightTime(start, currentPosition, speed), maxLeadTime);
+            Vector3 predictedPosition = currentPosition + agent.velocity * leadTime;
+            NavMeshQueryFilter filter = new NavMeshQueryFilter
+            {
+                agentTypeID = agent.agentTypeID,
+                areaMask = agent.areaMask
+            };
+
+            if (NavMesh.SamplePosition(predictedPosition, out NavMeshHit predictedHit, navMeshSampleDistance, filter))
+                destination = predictedHit.position;
+            else if (NavMesh.SamplePosition(currentPosition, out NavMeshHit currentHit, 1f, filter))
+                destination = currentHit.position;
         }
-        // The current path uses render meshes for navigation and does not require physics colliders.
-        if (NavMesh.SamplePosition(destination, out NavMeshHit ground, BlastRadius, NavMesh.AllAreas))
-            destination.y = ground.position.y;
-        else destination.y -= agent != null ? agent.baseOffset : 0.5f;
-        flightTime = GetFlightTime(start, destination, speed);
+        else
+        {
+            destination.y -= agent != null ? agent.baseOffset : 0.5f;
+        }
+
+        float flightTime = GetFlightTime(start, destination, speed);
         projectile.LaunchMortar(this, destination, flightTime);
     }
 

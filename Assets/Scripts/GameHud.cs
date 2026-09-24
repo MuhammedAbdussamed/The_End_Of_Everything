@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 [RequireComponent(typeof(Canvas), typeof(GraphicRaycaster))]
@@ -29,9 +30,19 @@ public class GameHud : MonoBehaviour
     private Button archerBuildButton;
     private Button mageBuildButton;
     private Button bomberBuildButton;
+    private Button castleBuildButton;
     private Button closeBuildButton;
     private Button sellButton;
     private Text sellButtonText;
+    private Button guardButton;
+    private Text guardButtonText;
+    private Button restartButton;
+    private Button mainMenuButton;
+    private CastleTower guardPlacementCastle;
+    private GuardUnit selectedGuard;
+    private bool groupGuardPlacement;
+    private bool progressionRecorded;
+    private float lastFlagClickTime = -10f;
     private Canvas hudCanvas;
 
     public string WaveLabel => waveText.text;
@@ -45,10 +56,13 @@ public class GameHud : MonoBehaviour
     public TowerBase SelectedTower => selectedTower;
     public BuildSite SelectedBuildSite => selectedBuildSite;
     public string UpgradeButtonLabel => upgradeButtonText != null ? upgradeButtonText.text : string.Empty;
+    public bool GuardPlacementActive => guardPlacementCastle != null;
 
     private void Awake()
     {
         hudCanvas = GetComponent<Canvas>();
+        if (upgradePanel != null && upgradePanel.transform is RectTransform upgradePanelRect)
+            upgradePanelRect.sizeDelta = new Vector2(upgradePanelRect.sizeDelta.x, 324f);
         if (resultDetails != null)
         {
             resultDetails.rectTransform.anchoredPosition = new Vector2(24f, -124f);
@@ -56,7 +70,9 @@ public class GameHud : MonoBehaviour
             resultDetails.fontSize = 22;
         }
         CreateSellButton();
+        CreateGuardButton();
         CreateBuildPanel();
+        CreateResultButtons();
     }
 
     private void OnEnable()
@@ -64,10 +80,14 @@ public class GameHud : MonoBehaviour
         if (upgradeButton != null) upgradeButton.onClick.AddListener(UpgradeSelectedTower);
         if (closeUpgradeButton != null) closeUpgradeButton.onClick.AddListener(CloseTowerPanel);
         if (sellButton != null) sellButton.onClick.AddListener(SellSelectedTower);
+        if (guardButton != null) guardButton.onClick.AddListener(ToggleGuardPlacement);
         if (archerBuildButton != null) archerBuildButton.onClick.AddListener(() => BuildSelected(BuildSite.TowerKind.Archer));
         if (mageBuildButton != null) mageBuildButton.onClick.AddListener(() => BuildSelected(BuildSite.TowerKind.Mage));
         if (bomberBuildButton != null) bomberBuildButton.onClick.AddListener(() => BuildSelected(BuildSite.TowerKind.Bomber));
+        if (castleBuildButton != null) castleBuildButton.onClick.AddListener(() => BuildSelected(BuildSite.TowerKind.Castle));
         if (closeBuildButton != null) closeBuildButton.onClick.AddListener(CloseBuildPanel);
+        if (restartButton != null) restartButton.onClick.AddListener(RestartLevel);
+        if (mainMenuButton != null) mainMenuButton.onClick.AddListener(ReturnToMainMenu);
         waves.Changed += Refresh;
         playerHealth.Changed += Refresh;
         if (playerGold != null) playerGold.Changed += Refresh;
@@ -83,10 +103,14 @@ public class GameHud : MonoBehaviour
         if (upgradeButton != null) upgradeButton.onClick.RemoveListener(UpgradeSelectedTower);
         if (closeUpgradeButton != null) closeUpgradeButton.onClick.RemoveListener(CloseTowerPanel);
         if (sellButton != null) sellButton.onClick.RemoveListener(SellSelectedTower);
+        if (guardButton != null) guardButton.onClick.RemoveListener(ToggleGuardPlacement);
         if (archerBuildButton != null) archerBuildButton.onClick.RemoveAllListeners();
         if (mageBuildButton != null) mageBuildButton.onClick.RemoveAllListeners();
         if (bomberBuildButton != null) bomberBuildButton.onClick.RemoveAllListeners();
+        if (castleBuildButton != null) castleBuildButton.onClick.RemoveAllListeners();
         if (closeBuildButton != null) closeBuildButton.onClick.RemoveListener(CloseBuildPanel);
+        if (restartButton != null) restartButton.onClick.RemoveListener(RestartLevel);
+        if (mainMenuButton != null) mainMenuButton.onClick.RemoveListener(ReturnToMainMenu);
     }
 
     private void Refresh()
@@ -96,6 +120,11 @@ public class GameHud : MonoBehaviour
         if (goldText != null && playerGold != null) goldText.text = playerGold.CurrentGold.ToString();
         bool won = waves.State == WaveController.WaveState.Completed;
         bool lost = waves.State == WaveController.WaveState.Defeated;
+        if (won && !progressionRecorded)
+        {
+            LevelProgress.CompleteLevel(gameObject.scene.name);
+            progressionRecorded = true;
+        }
         if (resultPanel != null)
         {
             resultPanel.SetActive(won || lost);
@@ -130,10 +159,23 @@ public class GameHud : MonoBehaviour
         _ => "★"
     };
 
+    public void RestartLevel()
+    {
+        Time.timeScale = 1f;
+        SceneManager.LoadScene(gameObject.scene.name);
+    }
+
+    public void ReturnToMainMenu()
+    {
+        Time.timeScale = 1f;
+        SceneManager.LoadScene("MainMenu");
+    }
+
     public void OpenTowerPanel(TowerBase tower)
     {
         if (tower == null || ResultVisible) return;
         CloseBuildPanel();
+        if (guardPlacementCastle != tower) CancelGuardPlacement();
         if (selectedTower != null) selectedTower.Upgraded -= OnTowerUpgraded;
         selectedTower = tower;
         selectedTower.Upgraded += OnTowerUpgraded;
@@ -155,6 +197,7 @@ public class GameHud : MonoBehaviour
         if (selectedTower != null) selectedTower.Upgraded -= OnTowerUpgraded;
         selectedTower = null;
         if (upgradePanel != null) upgradePanel.SetActive(false);
+        CancelGuardPlacement();
     }
 
     public void CloseBuildPanel()
@@ -203,6 +246,13 @@ public class GameHud : MonoBehaviour
             SellSelectedTower();
             return true;
         }
+        if (guardButton != null && guardButton.gameObject.activeSelf && IsPointerOver(guardButton.transform as RectTransform, screenPosition))
+        {
+            // A live EventSystem invokes the Button callback on release. Keep the direct
+            // call only as a fallback for tests or scenes without an EventSystem.
+            if (EventSystem.current == null) ToggleGuardPlacement();
+            return true;
+        }
         return IsPointerOver(upgradePanel.transform as RectTransform, screenPosition);
     }
 
@@ -212,6 +262,7 @@ public class GameHud : MonoBehaviour
         if (TryClickBuildButton(archerBuildButton, BuildSite.TowerKind.Archer, screenPosition)) return true;
         if (TryClickBuildButton(mageBuildButton, BuildSite.TowerKind.Mage, screenPosition)) return true;
         if (TryClickBuildButton(bomberBuildButton, BuildSite.TowerKind.Bomber, screenPosition)) return true;
+        if (TryClickBuildButton(castleBuildButton, BuildSite.TowerKind.Castle, screenPosition)) return true;
         if (closeBuildButton != null && IsPointerOver(closeBuildButton.transform as RectTransform, screenPosition))
         {
             CloseBuildPanel();
@@ -226,6 +277,30 @@ public class GameHud : MonoBehaviour
     public bool IsPointerOverTowerPanel(Vector2 screenPosition) =>
         (UpgradePanelVisible && IsPointerOver(upgradePanel.transform as RectTransform, screenPosition))
         || (BuildPanelVisible && IsPointerOver(buildPanel.transform as RectTransform, screenPosition));
+
+    public bool TrySelectGuard(GuardUnit guard)
+    {
+        if (!GuardPlacementActive || groupGuardPlacement || guard == null || guard.Castle != guardPlacementCastle) return false;
+        selectedGuard = guard;
+        RefreshGuardButton();
+        return true;
+    }
+
+    public bool TryPlaceSelectedGuard(Vector3 worldPosition)
+    {
+        if (!GuardPlacementActive || guardPlacementCastle == null) return false;
+        if (groupGuardPlacement)
+        {
+            bool formationPlaced = guardPlacementCastle.TrySetGuardsFormation(worldPosition);
+            if (formationPlaced) CancelGuardPlacement();
+            return formationPlaced;
+        }
+        if (selectedGuard == null) return false;
+        bool placed = guardPlacementCastle.TrySetGuardPosition(selectedGuard, worldPosition);
+        if (placed) selectedGuard = null;
+        RefreshGuardButton();
+        return placed;
+    }
 
     private bool IsPointerOver(RectTransform rect, Vector2 screenPosition)
     {
@@ -253,10 +328,16 @@ public class GameHud : MonoBehaviour
             ArcherTower => "Okçu Kulesi",
             MageTower => "Büyücü Kulesi",
             BomberTower => "Bombacı Kulesi",
+            CastleTower => "Kale",
             _ => "Kule"
         };
         towerLevelText.text = $"Seviye {selectedTower.TowerLevel}";
-        towerStatsText.text = $"Hasar  {selectedTower.TowerDamage:0.#}\nHız  {selectedTower.TowerAttackSpeed:0.##}/sn\nMenzil  {selectedTower.TowerRange:0.##}";
+        if (selectedTower is CastleTower castle)
+            towerStatsText.text = $"Asker Hasarı  {castle.GuardDamage:0.#}\nAsker Canı  {castle.GuardHealth:0.#}\nSaldırı Hızı  1/sn\nMenzil  {castle.TowerRange:0.##}";
+        else
+            towerStatsText.text = $"Hasar  {selectedTower.TowerDamage:0.#}\nHız  {selectedTower.TowerAttackSpeed:0.##}/sn\nMenzil  {selectedTower.TowerRange:0.##}";
+        if (guardButton != null) guardButton.gameObject.SetActive(selectedTower is CastleTower);
+        RefreshGuardButton();
         if (selectedTower.CanUpgrade)
         {
             upgradeButtonText.text = $"Yükselt  •  {selectedTower.UpgradeCost} Gold";
@@ -281,6 +362,7 @@ public class GameHud : MonoBehaviour
         SetBuildButtonState(archerBuildButton, 60);
         SetBuildButtonState(mageBuildButton, 90);
         SetBuildButtonState(bomberBuildButton, 120);
+        SetBuildButtonState(castleBuildButton, 70);
     }
 
     private void SetBuildButtonState(Button button, int cost)
@@ -312,6 +394,80 @@ public class GameHud : MonoBehaviour
         if (sellButtonText != null) sellButtonText.fontSize = 14;
     }
 
+    private void CreateGuardButton()
+    {
+        if (upgradeButton == null || upgradePanel == null) return;
+        guardButton = Instantiate(upgradeButton, upgradePanel.transform);
+        guardButton.name = "Guard Placement";
+        guardButton.onClick.RemoveAllListeners();
+        RectTransform rect = guardButton.transform as RectTransform;
+        rect.anchoredPosition = new Vector2(22f, 76f);
+        rect.sizeDelta = new Vector2(296f, rect.sizeDelta.y);
+        Image image = guardButton.GetComponent<Image>();
+        if (image != null) image.color = new Color(0.66f, 0.45f, 0.16f, 1f);
+        guardButtonText = guardButton.GetComponentInChildren<Text>();
+        if (guardButtonText != null) guardButtonText.fontSize = 15;
+        guardButton.gameObject.SetActive(false);
+    }
+
+    private void ToggleGuardPlacement()
+    {
+        if (selectedTower is not CastleTower castle) return;
+        float now = Time.unscaledTime;
+        if (guardPlacementCastle == castle && now - lastFlagClickTime <= 0.35f)
+        {
+            groupGuardPlacement = true;
+            selectedGuard = null;
+            castle.ShowGuardBubbles(false);
+        }
+        else if (guardPlacementCastle == castle)
+        {
+            CancelGuardPlacement();
+        }
+        else
+        {
+            guardPlacementCastle = castle;
+            selectedGuard = null;
+            groupGuardPlacement = false;
+            castle.ShowGuardBubbles(true);
+        }
+        lastFlagClickTime = now;
+        RefreshGuardButton();
+    }
+
+    private void CancelGuardPlacement()
+    {
+        if (guardPlacementCastle != null) guardPlacementCastle.ShowGuardBubbles(false);
+        guardPlacementCastle = null;
+        selectedGuard = null;
+        groupGuardPlacement = false;
+        RefreshGuardButton();
+    }
+
+    private void RefreshGuardButton()
+    {
+        if (guardButtonText == null) return;
+        guardButtonText.text = !GuardPlacementActive ? "BAYRAK  •  Askerleri Konumlandır"
+            : groupGuardPlacement ? "BAYRAK  •  Zemine tıkla (3 asker)"
+            : selectedGuard == null ? "BAYRAK  •  Bir askere tıkla" : $"{selectedGuard.name} seçildi  •  Zemine tıkla";
+    }
+
+    private void CreateResultButtons()
+    {
+        if (resultPanel == null) return;
+
+        Transform card = resultText != null && resultText.transform.parent != null
+            ? resultText.transform.parent
+            : resultPanel.transform;
+        if (card is RectTransform cardRect)
+            cardRect.sizeDelta = new Vector2(cardRect.sizeDelta.x, 380f);
+
+        restartButton = CreateButton("Restart", card, "RESTART",
+            new Vector2(24f, -220f), new Vector2(392f, 54f), new Color(0.12f, 0.58f, 0.46f), 19);
+        mainMenuButton = CreateButton("Return to Main Menu", card, "RETURN TO MAIN MENU",
+            new Vector2(24f, -286f), new Vector2(392f, 54f), new Color(0.18f, 0.27f, 0.40f), 17);
+    }
+
     private void CreateBuildPanel()
     {
         buildPanel = CreateUiObject("Kule Kurma Paneli", transform, typeof(Image));
@@ -319,7 +475,7 @@ public class GameHud : MonoBehaviour
         panelRect.anchorMin = panelRect.anchorMax = new Vector2(1f, 0f);
         panelRect.pivot = new Vector2(1f, 0f);
         panelRect.anchoredPosition = new Vector2(-24f, 24f);
-        panelRect.sizeDelta = new Vector2(340f, 264f);
+        panelRect.sizeDelta = new Vector2(340f, 316f);
         buildPanel.GetComponent<Image>().color = new Color(0.04f, 0.07f, 0.10f, 0.97f);
 
         CreateLabel("Başlık", buildPanel.transform, "Kule Kur", new Vector2(22f, -20f), new Vector2(250f, 42f), 28, TextAnchor.MiddleLeft);
@@ -327,6 +483,7 @@ public class GameHud : MonoBehaviour
         archerBuildButton = CreateBuildButton("Okçu", "Okçu  •  60 Gold", -108f, new Color(0.15f, 0.48f, 0.38f), BuildSite.TowerKind.Archer);
         mageBuildButton = CreateBuildButton("Büyücü", "Büyücü  •  90 Gold", -158f, new Color(0.28f, 0.31f, 0.66f), BuildSite.TowerKind.Mage);
         bomberBuildButton = CreateBuildButton("Bombacı", "Bombacı  •  120 Gold", -208f, new Color(0.64f, 0.35f, 0.14f), BuildSite.TowerKind.Bomber);
+        castleBuildButton = CreateBuildButton("Kale", "Kale  •  70 Gold", -258f, new Color(0.46f, 0.47f, 0.52f), BuildSite.TowerKind.Castle);
         closeBuildButton = CreateButton("Kapat", buildPanel.transform, "×", new Vector2(286f, -18f), new Vector2(32f, 32f), new Color(0.30f, 0.34f, 0.39f), 22);
         buildPanel.SetActive(false);
     }

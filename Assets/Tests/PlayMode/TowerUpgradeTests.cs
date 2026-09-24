@@ -95,7 +95,7 @@ public class TowerUpgradeTests
         Assert.That(archer.Data.TowerRange, Is.EqualTo(baseRange), "Runtime upgrades must not modify the shared tower data asset.");
         hud.SellSelectedTower();
         yield return null;
-        Assert.That(gold.CurrentGold, Is.EqualTo(165), "Selling refunds 75% of the 60 gold construction price.");
+        Assert.That(gold.CurrentGold, Is.EqualTo(237), "Selling refunds 65% of all construction and upgrade spending.");
         Assert.That(site.IsEmpty, Is.True);
         Assert.That(site.GetComponent<Renderer>().enabled, Is.True);
         Assert.That(site.GetComponent<Collider>().enabled, Is.True);

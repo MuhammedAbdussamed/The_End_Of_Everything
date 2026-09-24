@@ -43,6 +43,21 @@ public class TowerInteractionController : MonoBehaviour
 
         bool overUi = (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
             || (hud != null && hud.IsPointerOverTowerPanel(Input.mousePosition));
+
+        if (!overUi && hud != null && hud.GuardPlacementActive)
+        {
+            if (mouseDown)
+            {
+                GuardUnit guard = FindGuardAtScreenPoint(mainCamera, Input.mousePosition);
+                if (guard != null) hud.TrySelectGuard(guard);
+                else if (TryGetGroundPoint(mainCamera, Input.mousePosition, out Vector3 point)) hud.TryPlaceSelectedGuard(point);
+            }
+            SetHoveredTower(null);
+            SetHoveredBuildSite(null);
+            UpdateRangeIndicator();
+            return;
+        }
+
         TowerBase tower = null;
         BuildSite buildSite = null;
         if (!overUi && hud != null && !hud.ResultVisible)
@@ -81,6 +96,55 @@ public class TowerInteractionController : MonoBehaviour
     {
         FindTargetsAtScreenPoint(camera, screenPoint, out TowerBase tower, out _);
         return tower;
+    }
+
+    private static GuardUnit FindGuardAtScreenPoint(Camera camera, Vector2 screenPoint)
+    {
+        if (camera == null) return null;
+        GuardUnit nearest = null;
+        float nearestDistance = float.PositiveInfinity;
+        int count = Physics.RaycastNonAlloc(camera.ScreenPointToRay(screenPoint), RaycastHits, 1000f, ~0,
+            QueryTriggerInteraction.Collide);
+        for (int index = 0; index < count; index++)
+        {
+            RaycastHit hit = RaycastHits[index];
+            GuardUnit guard = hit.collider.GetComponentInParent<GuardUnit>();
+            if (guard != null && guard.isActiveAndEnabled && guard.IsAlive && hit.distance < nearestDistance)
+            {
+                nearest = guard;
+                nearestDistance = hit.distance;
+            }
+        }
+        return nearest;
+    }
+
+    private static bool TryGetGroundPoint(Camera camera, Vector2 screenPoint, out Vector3 point)
+    {
+        point = default;
+        if (camera == null) return false;
+        int count = Physics.RaycastNonAlloc(camera.ScreenPointToRay(screenPoint), RaycastHits, 1000f, ~0,
+            QueryTriggerInteraction.Ignore);
+        float nearestDistance = float.PositiveInfinity;
+        for (int index = 0; index < count; index++)
+        {
+            RaycastHit hit = RaycastHits[index];
+            if (hit.collider.GetComponentInParent<GuardUnit>() != null
+                || hit.collider.GetComponentInParent<TowerBase>() != null
+                || hit.collider.GetComponentInParent<BuildSite>() != null) continue;
+            if (hit.distance >= nearestDistance) continue;
+            point = hit.point;
+            nearestDistance = hit.distance;
+        }
+        if (nearestDistance < float.PositiveInfinity) return true;
+
+        // Some walkable sections are represented only by the baked NavMesh and have no
+        // physical collider. Project the click onto the gameplay plane so CastleTower can
+        // clamp and sample the requested position against the actual NavMesh.
+        Ray ray = camera.ScreenPointToRay(screenPoint);
+        Plane gameplayPlane = new Plane(Vector3.up, Vector3.zero);
+        if (!gameplayPlane.Raycast(ray, out float enter)) return false;
+        point = ray.GetPoint(enter);
+        return true;
     }
 
     private static void FindTargetsAtScreenPoint(Camera camera, Vector2 screenPoint,

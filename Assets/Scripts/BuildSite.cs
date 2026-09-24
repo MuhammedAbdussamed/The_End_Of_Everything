@@ -3,7 +3,7 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public class BuildSite : MonoBehaviour
 {
-    public enum TowerKind { Archer, Mage, Bomber }
+    public enum TowerKind { Archer, Mage, Bomber, Castle }
 
     public static readonly Color NormalColor = new(0.62f, 0.48f, 0.34f, 1f);
     public static readonly Color HighlightColor = new(0.92f, 0.84f, 0.70f, 1f);

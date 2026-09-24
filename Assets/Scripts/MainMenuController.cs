@@ -9,6 +9,7 @@ public class MainMenuController : MonoBehaviour
     private Font uiFont;
     private GameObject mainPanel;
     private GameObject settingsPanel;
+    private GameObject savePanel;
     private GameObject levelPanel;
     private Text soundButtonLabel;
     private bool soundEnabled = true;
@@ -25,6 +26,7 @@ public class MainMenuController : MonoBehaviour
         CreateCanvas();
         BuildMainMenu();
         BuildSettings();
+        BuildSaveSlots();
         BuildLevelSelect();
         ShowMainMenu();
     }
@@ -56,7 +58,7 @@ private void CreateCanvas()
         CreateText("Title", mainPanel.transform, "THE END OF EVERYTHING", 52, FontStyle.Bold, new Vector2(0.5f, 0.82f), new Vector2(0.85f, 0.12f), Color.white);
         CreateText("Subtitle", mainPanel.transform, "Ana Menü", 23, FontStyle.Normal, new Vector2(0.5f, 0.74f), new Vector2(0.7f, 0.06f), new Color(0.65f, 0.75f, 0.9f));
 
-        CreateButton("StartButton", mainPanel.transform, "BAŞLA", new Vector2(0.5f, 0.58f), new Vector2(0.52f, 0.11f), accent, ShowLevels);
+        CreateButton("StartButton", mainPanel.transform, "BAŞLA", new Vector2(0.5f, 0.58f), new Vector2(0.52f, 0.11f), accent, ShowSaveSlots);
         CreateButton("SettingsButton", mainPanel.transform, "AYARLAR", new Vector2(0.5f, 0.44f), new Vector2(0.52f, 0.11f), new Color(0.15f, 0.23f, 0.36f), ShowSettings);
         CreateButton("QuitButton", mainPanel.transform, "ÇIKIŞ", new Vector2(0.5f, 0.30f), new Vector2(0.52f, 0.11f), new Color(0.48f, 0.16f, 0.20f), QuitGame);
 
@@ -78,26 +80,52 @@ private void CreateCanvas()
         CreateButton("SettingsBack", settingsPanel.transform, "GERİ", new Vector2(0.5f, 0.20f), new Vector2(0.38f, 0.14f), muted, ShowMainMenu);
     }
 
+    private void BuildSaveSlots()
+    {
+        savePanel = CreatePanel("SavePanel", canvasRoot, new Vector2(0.5f, 0.5f), new Vector2(0.80f, 0.60f), panelColor);
+        CreateText("SaveTitle", savePanel.transform, "KAYIT SEÇ", 42, FontStyle.Bold, new Vector2(0.5f, 0.84f), new Vector2(0.7f, 0.14f), Color.white);
+
+        CreateSaveCard(1, new Vector2(0.23f, 0.49f), accent);
+        CreateSaveCard(2, new Vector2(0.50f, 0.49f), new Color(0.18f, 0.52f, 0.72f));
+        CreateSaveCard(3, new Vector2(0.77f, 0.49f), new Color(0.64f, 0.35f, 0.18f));
+
+        CreateButton("SaveBack", savePanel.transform, "GERİ", new Vector2(0.5f, 0.16f), new Vector2(0.25f, 0.12f), muted, ShowMainMenu);
+    }
+
+    private void CreateSaveCard(int slot, Vector2 position, Color color)
+    {
+        GameObject card = CreatePanel($"SaveSlot{slot}", savePanel.transform, position, new Vector2(0.22f, 0.42f), color);
+        CreateText("Title", card.transform, $"KAYIT {slot}", 26, FontStyle.Bold, new Vector2(0.5f, 0.70f), new Vector2(0.9f, 0.18f), Color.white);
+
+        string status = LevelProgress.HasData(slot)
+            ? $"BÖLÜM {LevelProgress.GetHighestUnlockedLevel(slot)} AÇIK"
+            : "YENİ OYUN";
+        CreateText("State", card.transform, status, 20, FontStyle.Bold, new Vector2(0.5f, 0.40f), new Vector2(0.9f, 0.20f), Color.white);
+        CreateButton("Select", card.transform, "SEÇ", new Vector2(0.5f, 0.15f), new Vector2(0.72f, 0.20f), new Color(0.04f, 0.24f, 0.25f), () => SelectSaveSlot(slot));
+    }
+
     private void BuildLevelSelect()
     {
         levelPanel = CreatePanel("LevelPanel", canvasRoot, new Vector2(0.5f, 0.5f), new Vector2(0.80f, 0.60f), panelColor);
-        CreateText("LevelTitle", levelPanel.transform, "BÖLÜM SEÇ", 42, FontStyle.Bold, new Vector2(0.5f, 0.84f), new Vector2(0.7f, 0.14f), Color.white);
+        CreateText("LevelTitle", levelPanel.transform, $"KAYIT {LevelProgress.ActiveSlot}  •  BÖLÜM SEÇ", 42, FontStyle.Bold, new Vector2(0.5f, 0.84f), new Vector2(0.8f, 0.14f), Color.white);
 
-        CreateLevelCard("Level1", levelPanel.transform, new Vector2(0.23f, 0.49f), "BÖLÜM 1", "AÇIK", accent, true);
-        CreateLevelCard("Level2", levelPanel.transform, new Vector2(0.50f, 0.49f), "BÖLÜM 2", "🔒\nKİLİTLİ", muted, false);
-        CreateLevelCard("Level3", levelPanel.transform, new Vector2(0.77f, 0.49f), "BÖLÜM 3", "🔒\nKİLİTLİ", muted, false);
+        CreateLevelCard("Level1", levelPanel.transform, new Vector2(0.23f, 0.49f), "BÖLÜM 1", "3 DALGA", accent, 1, "SampleScene");
+        CreateLevelCard("Level2", levelPanel.transform, new Vector2(0.50f, 0.49f), "BÖLÜM 2", "5 DALGA", new Color(0.18f, 0.52f, 0.72f), 2, "Level2");
+        CreateLevelCard("Level3", levelPanel.transform, new Vector2(0.77f, 0.49f), "BÖLÜM 3", "6 DALGA", new Color(0.64f, 0.35f, 0.18f), 3, "Level3");
 
-        CreateButton("LevelBack", levelPanel.transform, "GERİ", new Vector2(0.5f, 0.16f), new Vector2(0.25f, 0.12f), muted, ShowMainMenu);
+        CreateButton("LevelBack", levelPanel.transform, "GERİ", new Vector2(0.5f, 0.16f), new Vector2(0.25f, 0.12f), muted, ShowSaveSlots);
     }
 
-    private void CreateLevelCard(string name, Transform parent, Vector2 position, string title, string state, Color color, bool unlocked)
+    private void CreateLevelCard(string name, Transform parent, Vector2 position, string title, string waveSummary, Color color, int levelNumber, string sceneName)
     {
-        GameObject card = CreatePanel(name, parent, position, new Vector2(0.22f, 0.42f), color);
+        bool unlocked = LevelProgress.IsUnlocked(levelNumber);
+        GameObject card = CreatePanel(name, parent, position, new Vector2(0.22f, 0.42f), unlocked ? color : muted);
         CreateText("Title", card.transform, title, 24, FontStyle.Bold, new Vector2(0.5f, 0.70f), new Vector2(0.9f, 0.18f), Color.white);
-        CreateText("State", card.transform, state, unlocked ? 20 : 29, FontStyle.Bold, new Vector2(0.5f, 0.39f), new Vector2(0.9f, 0.28f), unlocked ? Color.white : new Color(0.75f, 0.80f, 0.86f));
+        CreateText("State", card.transform, unlocked ? waveSummary : "🔒\nKİLİTLİ", unlocked ? 20 : 29, FontStyle.Bold,
+            new Vector2(0.5f, 0.39f), new Vector2(0.9f, 0.28f), unlocked ? Color.white : new Color(0.75f, 0.80f, 0.86f));
 
         if (unlocked)
-            CreateButton("Play", card.transform, "OYNA", new Vector2(0.5f, 0.15f), new Vector2(0.72f, 0.20f), new Color(0.04f, 0.24f, 0.25f), StartLevelOne);
+            CreateButton("Play", card.transform, "OYNA", new Vector2(0.5f, 0.15f), new Vector2(0.72f, 0.20f), new Color(0.04f, 0.24f, 0.25f), () => StartLevel(sceneName));
     }
 
     private GameObject CreatePanel(string name, Transform parent, Vector2 anchor, Vector2 size, Color color)
@@ -158,6 +186,7 @@ private void CreateCanvas()
     {
         mainPanel.SetActive(true);
         settingsPanel.SetActive(false);
+        savePanel.SetActive(false);
         levelPanel.SetActive(false);
     }
 
@@ -165,20 +194,40 @@ private void CreateCanvas()
     {
         mainPanel.SetActive(false);
         settingsPanel.SetActive(true);
+        savePanel.SetActive(false);
         levelPanel.SetActive(false);
+    }
+
+    private void ShowSaveSlots()
+    {
+        if (savePanel != null) Destroy(savePanel);
+        BuildSaveSlots();
+        mainPanel.SetActive(false);
+        settingsPanel.SetActive(false);
+        savePanel.SetActive(true);
+        levelPanel.SetActive(false);
+    }
+
+    private void SelectSaveSlot(int slot)
+    {
+        LevelProgress.SelectSlot(slot);
+        if (levelPanel != null) Destroy(levelPanel);
+        BuildLevelSelect();
+        ShowLevels();
     }
 
     private void ShowLevels()
     {
         mainPanel.SetActive(false);
         settingsPanel.SetActive(false);
+        savePanel.SetActive(false);
         levelPanel.SetActive(true);
     }
 
-    private void StartLevelOne()
+    private void StartLevel(string sceneName)
     {
-        Debug.Log("Bölüm 1 başlatılıyor.");
-        SceneManager.LoadScene("SampleScene");
+        Debug.Log($"{sceneName} başlatılıyor.");
+        SceneManager.LoadScene(sceneName);
     }
 
     private void QuitGame()

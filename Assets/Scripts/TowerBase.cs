@@ -32,6 +32,7 @@ public class TowerBase : MonoBehaviour
     private readonly List<TowerProjectile> completedProjectiles = new List<TowerProjectile>(); // 1
     private float attackTimer; // 1
     private int currentLevel;
+    private int totalGoldSpent;
     private BuildSite buildSite;
     private SphereCollider rangeCollider;
     private Collider[] towerColliders;
@@ -41,7 +42,7 @@ public class TowerBase : MonoBehaviour
 
     public IReadOnlyList<PathEnemy> EnemiesInRange => enemiesInRange;
 
-    public float TowerRange => (towerData?.TowerRange ?? 0f) * CurrentMultiplier(levelTwoRangeMultiplier, levelThreeRangeMultiplier);
+    public virtual float TowerRange => (towerData?.TowerRange ?? 0f) * CurrentMultiplier(levelTwoRangeMultiplier, levelThreeRangeMultiplier);
 
     public int TowerLevel => currentLevel > 0 ? currentLevel : towerData?.TowerLevel ?? 1;
 
@@ -51,6 +52,7 @@ public class TowerBase : MonoBehaviour
 
     public int BuildCost => this switch
     {
+        CastleTower => 70,
         BomberTower => 120,
         MageTower => 90,
         _ => 60
@@ -58,6 +60,8 @@ public class TowerBase : MonoBehaviour
 
     public int UpgradeCost => TowerLevel switch
     {
+        1 when this is CastleTower => 55,
+        2 when this is CastleTower => 85,
         1 when this is BomberTower => 95,
         1 when this is MageTower => 70,
         1 => 45,
@@ -67,7 +71,9 @@ public class TowerBase : MonoBehaviour
         _ => 0
     };
 
-    public int SellValue => Mathf.RoundToInt(BuildCost * 0.75f);
+    public int TotalGoldSpent => totalGoldSpent > 0 ? totalGoldSpent : BuildCost;
+
+    public int SellValue => Mathf.RoundToInt(TotalGoldSpent * 0.65f);
 
     public bool CanUpgrade => TowerLevel < 3;
 
@@ -88,6 +94,7 @@ public class TowerBase : MonoBehaviour
         towerData = data;
         projectilePool = pool;
         currentLevel = Mathf.Clamp(towerData?.TowerLevel ?? 1, 1, 3);
+        totalGoldSpent = BuildCost;
     }
 
     /// <summary>Alt kulelerin kendi projectile hızını ortak fırlatma sistemine vermesini sağlar.</summary> // 1
@@ -103,14 +110,20 @@ public class TowerBase : MonoBehaviour
 
     public bool TryUpgrade(PlayerGold playerGold)
     {
-        if (!CanUpgrade || playerGold == null || !playerGold.TrySpendGold(UpgradeCost)) return false;
+        int cost = UpgradeCost;
+        if (!CanUpgrade || playerGold == null || !playerGold.TrySpendGold(cost)) return false;
         currentLevel++;
+        totalGoldSpent += cost;
         SyncRangeCollider();
         Upgraded?.Invoke(this);
         return true;
     }
 
-    public void InitializeConstruction(BuildSite owner) => buildSite = owner;
+    public void InitializeConstruction(BuildSite owner)
+    {
+        buildSite = owner;
+        if (totalGoldSpent <= 0) totalGoldSpent = BuildCost;
+    }
 
     public bool TrySell(PlayerGold playerGold)
     {
@@ -146,11 +159,16 @@ public class TowerBase : MonoBehaviour
         attackTimer -= Time.deltaTime; // 1
         if (attackTimer > 0f) return; // 1
 
-        if (LaunchProjectile(enemiesInRange[0])) // 1
+        PathEnemy target = SelectTarget(enemiesInRange);
+        if (target != null && LaunchProjectile(target)) // 1
         {
             attackTimer = 1f / TowerAttackSpeed; // 1
         }
     }
+
+    /// <summary>Chooses which valid in-range enemy to attack. Towers may override this for specialized targeting.</summary>
+    protected virtual PathEnemy SelectTarget(IReadOnlyList<PathEnemy> candidates) =>
+        candidates.Count > 0 ? candidates[0] : null;
 
     /// <summary>Kule menziline giren düşmanı giriş sırasına göre listeye ekler.</summary>
     protected virtual void OnTriggerEnter(Collider other) // 1
@@ -190,7 +208,8 @@ public class TowerBase : MonoBehaviour
     {
         if (projectilePool == null)
         {
-            Debug.LogWarning($"{name}: Assign a projectile pool to enable tower attacks.", this);
+            if (TowerAttackSpeed > 0f)
+                Debug.LogWarning($"{name}: Assign a projectile pool to enable tower attacks.", this);
             return;
         }
 

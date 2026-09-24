@@ -11,7 +11,7 @@ public class TowerBuildSystem : MonoBehaviour
     private Material siteMaterial;
     private BombExplosionVisual explosionVisual;
 
-    private static readonly Vector3[] SitePositions =
+    private static readonly Vector3[] DefaultSitePositions =
     {
         new(-10f, 0.16f, -23f),
         new(-25f, 0.16f, -15f),
@@ -23,9 +23,34 @@ public class TowerBuildSystem : MonoBehaviour
         new(26f, 0.16f, -3f)
     };
 
+    private static readonly Vector3[] LevelTwoSitePositions =
+    {
+        new(-24f, 0.16f, -21f),
+        new(-15f, 0.16f, -21f),
+        new(-31f, 0.16f, -12f),
+        new(-31f, 0.16f, -3f),
+        new(-18.4f, 0.16f, 7f),
+        new(-5.8f, 0.16f, 7f),
+        new(8f, 0.16f, 21f),
+        new(17f, 0.16f, 21f)
+    };
+
+    private static readonly Vector3[] LevelThreeSitePositions =
+    {
+        new(-7f, 0.16f, -39f),
+        new(19f, 0.16f, -26f),
+        new(-10.4f, 0.16f, -27f),
+        new(-33f, 0.16f, -15.8f),
+        new(-12.8f, 0.16f, 1f),
+        new(4.8f, 0.16f, 1f),
+        new(-23f, 0.16f, 12.2f),
+        new(-7.6f, 0.16f, 29f),
+        new(3.6f, 0.16f, 29f)
+    };
+
     public const float SiteDiameter = 2.7f;
     public const float SiteRadius = SiteDiameter * 0.5f;
-    public static IReadOnlyList<Vector3> PreviewPositions => SitePositions;
+    public static IReadOnlyList<Vector3> PreviewPositions => DefaultSitePositions;
     public IReadOnlyList<BuildSite> Sites => sites;
 
     private void Awake()
@@ -37,6 +62,7 @@ public class TowerBuildSystem : MonoBehaviour
 
     public int GetBuildCost(BuildSite.TowerKind kind) => kind switch
     {
+        BuildSite.TowerKind.Castle => 70,
         BuildSite.TowerKind.Bomber => 120,
         BuildSite.TowerKind.Mage => 90,
         _ => 60
@@ -52,6 +78,7 @@ public class TowerBuildSystem : MonoBehaviour
         {
             BuildSite.TowerKind.Archer => "Okçu Kulesi",
             BuildSite.TowerKind.Mage => "Büyücü Kulesi",
+            BuildSite.TowerKind.Castle => "Kale",
             _ => "Bombacı Kulesi"
         };
         towerObject.transform.SetPositionAndRotation(
@@ -66,6 +93,7 @@ public class TowerBuildSystem : MonoBehaviour
         {
             BuildSite.TowerKind.Archer => towerObject.AddComponent<ArcherTower>(),
             BuildSite.TowerKind.Mage => towerObject.AddComponent<MageTower>(),
+            BuildSite.TowerKind.Castle => towerObject.AddComponent<CastleTower>(),
             _ => towerObject.AddComponent<BomberTower>()
         };
         TowerData data = CreateRuntimeData(kind);
@@ -84,6 +112,15 @@ public class TowerBuildSystem : MonoBehaviour
             BomberTowerData data = ScriptableObject.CreateInstance<BomberTowerData>();
             data.hideFlags = HideFlags.HideAndDontSave;
             data.ConfigureRuntime(3.25f, 1, 0.45f, 35f, TowerData.TowerDamageType.Physical, 3f);
+            return data;
+        }
+
+        if (kind == BuildSite.TowerKind.Castle)
+        {
+            TowerData data = ScriptableObject.CreateInstance<TowerData>();
+            data.hideFlags = HideFlags.HideAndDontSave;
+            // The castle itself does not attack; its fixed range defines valid guard positions.
+            data.ConfigureRuntime(6.25f, 1, 0f, 0f, TowerData.TowerDamageType.Physical);
             return data;
         }
 
@@ -122,6 +159,7 @@ public class TowerBuildSystem : MonoBehaviour
         {
             BuildSite.TowerKind.Archer => new Color(0.15f, 0.48f, 0.38f),
             BuildSite.TowerKind.Mage => new Color(0.28f, 0.31f, 0.66f),
+            BuildSite.TowerKind.Castle => new Color(0.46f, 0.47f, 0.52f),
             _ => new Color(0.64f, 0.35f, 0.14f)
         };
         material = new Material(shader) { color = color, hideFlags = HideFlags.HideAndDontSave, enableInstancing = true };
@@ -146,7 +184,7 @@ public class TowerBuildSystem : MonoBehaviour
                 hideFlags = HideFlags.HideAndDontSave,
                 enableInstancing = true
             };
-        foreach (Vector3 position in SitePositions)
+        foreach (Vector3 position in GetSitePositions())
         {
             GameObject marker = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
             marker.name = "Boş İnşa Alanı";
@@ -162,6 +200,13 @@ public class TowerBuildSystem : MonoBehaviour
             sites.Add(site);
         }
     }
+
+    private IReadOnlyList<Vector3> GetSitePositions() => gameObject.scene.name switch
+    {
+        "Level2" => LevelTwoSitePositions,
+        "Level3" => LevelThreeSitePositions,
+        _ => DefaultSitePositions
+    };
 
     private void OnDestroy()
     {

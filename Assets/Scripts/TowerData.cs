@@ -41,7 +41,7 @@ public class TowerData : ScriptableObject
     {
         towerRange = Mathf.Max(0.1f, range);
         towerLevel = Mathf.Max(1, level);
-        towerAttackSpeed = Mathf.Max(0.01f, attackSpeed);
+        towerAttackSpeed = Mathf.Max(0f, attackSpeed);
         towerDamage = Mathf.Max(0f, damage);
         damageType = type;
     }

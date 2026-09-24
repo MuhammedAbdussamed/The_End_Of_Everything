@@ -10,6 +10,10 @@ public class PathEnemy : MonoBehaviour
     [SerializeField] private Transform waypointRoot;
     [SerializeField, Min(0.05f)] private float waypointReachDistance = 0.4f;
     [SerializeField, Min(0.05f)] private float navMeshSampleDistance = 0.75f;
+    [Header("Guard Targeting")]
+    [SerializeField, Min(0.5f)] private float guardAggroRange = 4.5f;
+    [SerializeField, Min(0.2f)] private float guardAttackRange = 1.25f;
+    [SerializeField, Min(0.1f)] private float guardAttackInterval = 1f;
 
     private NavMeshAgent agent;
     private PathWaypoint[] waypoints;
@@ -17,6 +21,9 @@ public class PathEnemy : MonoBehaviour
     private NavMeshQueryFilter queryFilter;
     private bool hasMovementTarget;
     private Enemy enemyStats;
+    private GuardUnit guardTarget;
+    private float guardAttackTimer;
+    private float nextGuardSearchTime;
 
     public int WaypointCount => waypoints?.Length ?? 0;
     public int CurrentWaypointIndex { get; private set; }
@@ -84,8 +91,10 @@ public class PathEnemy : MonoBehaviour
 
     private void Update()
     {
-        if (agent == null || !agent.isActiveAndEnabled || !agent.isOnNavMesh
-            || !hasMovementTarget || agent.pathPending) return;
+        if (agent == null || !agent.isActiveAndEnabled || !agent.isOnNavMesh) return;
+
+        if (UpdateGuardCombat()) return;
+        if (!hasMovementTarget || agent.pathPending) return;
 
         float reachDistance = Mathf.Max(waypointReachDistance, agent.stoppingDistance);
         if (float.IsInfinity(agent.remainingDistance) || agent.remainingDistance > reachDistance) return;
@@ -104,6 +113,63 @@ public class PathEnemy : MonoBehaviour
         }
 
         MoveToNextWaypoint();
+    }
+
+    private bool UpdateGuardCombat()
+    {
+        if (guardTarget == null || !guardTarget.isActiveAndEnabled || !guardTarget.IsAlive)
+        {
+            guardTarget = null;
+            if (Time.time >= nextGuardSearchTime)
+            {
+                nextGuardSearchTime = Time.time + 0.2f;
+                guardTarget = FindNearestGuard();
+            }
+            if (guardTarget == null) return false;
+        }
+
+        Vector3 targetPosition = guardTarget.transform.position;
+        Vector3 offset = targetPosition - transform.position;
+        offset.y = 0f;
+        CurrentTarget = targetPosition;
+        hasMovementTarget = true;
+
+        if (offset.sqrMagnitude > guardAttackRange * guardAttackRange)
+        {
+            agent.isStopped = false;
+            agent.SetDestination(targetPosition);
+            return true;
+        }
+
+        agent.isStopped = true;
+        agent.ResetPath();
+        agent.velocity = Vector3.zero;
+        guardAttackTimer -= Time.deltaTime;
+        if (guardAttackTimer <= 0f)
+        {
+            guardTarget.TakeDamage(enemyStats != null ? enemyStats.AttackDamage : 0f);
+            guardAttackTimer = guardAttackInterval;
+        }
+        return true;
+    }
+
+    private GuardUnit FindNearestGuard()
+    {
+        GuardUnit closest = null;
+        float closestDistance = guardAggroRange * guardAggroRange;
+        foreach (GuardUnit guard in FindObjectsByType<GuardUnit>(FindObjectsSortMode.None))
+        {
+            if (!guard.IsAlive || !guard.isActiveAndEnabled) continue;
+            Vector3 offset = guard.transform.position - transform.position;
+            offset.y = 0f;
+            float distance = offset.sqrMagnitude;
+            if (distance < closestDistance)
+            {
+                closest = guard;
+                closestDistance = distance;
+            }
+        }
+        return closest;
     }
 
     private void MoveToNextWaypoint()
